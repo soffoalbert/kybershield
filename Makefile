@@ -18,7 +18,7 @@ help: ## Show available targets
 
 up: ## Build and start the full stack
 	$(COMPOSE) up --build -d
-	@echo "ingestion  -> http://localhost:$${INGESTION_PORT:-3000}"
+	@echo "ingestion  -> http://localhost:$${INGESTION_PORT:-3000}/docs"
 	@echo "analyser   -> http://localhost:$${ANALYSER_PORT:-8001}/docs"
 	@echo "insights   -> http://localhost:$${INSIGHTS_PORT:-8002}/docs"
 
