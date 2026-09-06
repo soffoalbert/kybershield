@@ -44,7 +44,9 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
       PORT: 8001
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-5}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      LISTEN_ENABLED: ${LISTEN_ENABLED:-true}
+      NOTIFY_CHANNEL: ${NOTIFY_CHANNEL:-events_ingested}
       BATCH_SIZE: ${BATCH_SIZE:-200}
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-api.openai.com,github.com,pypi.org,registry.npmjs.org}
     ports:

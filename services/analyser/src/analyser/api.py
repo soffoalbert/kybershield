@@ -65,6 +65,21 @@ async def lifespan(app: FastAPI):
     same instances. When `poller_enabled` is false the poller is skipped, which
     is how integration tests get a deterministic pipeline driven only by
     explicit `run_once` calls.
+
+    Build the poller's wakeup source when `config.listen_enabled`::
+
+        listener = IngestListener(
+            config.database_url,
+            config.notify_channel,
+            config.listen_reconnect_seconds,
+        )
+
+    and pass it to ``Poller(engine, config.poll_interval_seconds,
+    listener=listener)``. `Poller.stop` closes the listener, so teardown stays
+    a single `await app.state.poller.stop()`.
+
+    The listener opens its own connection rather than borrowing from the pool,
+    so size the pool without counting it.
     """
 
     config = get_config()

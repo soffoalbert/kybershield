@@ -19,11 +19,23 @@ class AnalyserConfig(BaseServiceSettings):
     port: int = 8001
 
     # --- Poller ---
-    poll_interval_seconds: float = 5.0
+    # Fallback only. New events normally arrive via LISTEN/NOTIFY, so this is
+    # the upper bound on latency when a notification is missed rather than the
+    # normal detection latency. Longer than the old push-free default for that
+    # reason.
+    poll_interval_seconds: float = 30.0
     batch_size: int = 200
     # When false the FastAPI app starts without a poller, so `POST
     # /v1/analyze/run` is the only trigger. Useful in tests.
     poller_enabled: bool = True
+
+    # --- LISTEN/NOTIFY ---
+    # Must match the channel in db/migrations/002_notify_on_ingest.sql.
+    notify_channel: str = "events_ingested"
+    # When false the poller runs on the interval alone. Useful for tests, and
+    # an escape hatch if the trigger is ever dropped.
+    listen_enabled: bool = True
+    listen_reconnect_seconds: float = 5.0
 
     # --- domain_allowlist rule ---
     allowed_domains: list[str] = []
@@ -59,4 +71,6 @@ def get_config() -> AnalyserConfig:
 
     Cached so FastAPI dependencies and the CLI observe the same instance.
     """
-    return AnalyserConfig(**os.environ)
+    # BaseSettings reads the environment itself; passing `os.environ` as kwargs
+    # would hand it uppercase keys that match no field.
+    return AnalyserConfig()

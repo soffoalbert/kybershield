@@ -7,7 +7,7 @@ Three services over one PostgreSQL database:
 | Service     | Stack                        | Port | Responsibility                                          |
 | ----------- | ---------------------------- | ---- | ------------------------------------------------------- |
 | `ingestion` | Node.js 22, Fastify 5, TS    | 3000 | Authenticated, idempotent event intake                   |
-| `analyser`  | Python 3.12, FastAPI         | 8001 | Rule-based risk analysis, background poller + manual run |
+| `analyser`  | Python 3.12, FastAPI         | 8001 | Rule-based risk analysis, LISTEN/NOTIFY driven + manual run |
 | `insights`  | Python 3.12, FastAPI + Typer | 8002 | Read-only alert queries, agent summaries, timelines      |
 
 ## Quick start
@@ -31,7 +31,15 @@ Every service serves browsable, try-it-out OpenAPI 3.1 documentation:
 
 The ingestion endpoints require a key, so click **Authorize** in its Swagger UI and paste a secret from `API_KEYS` (`dev-secret-key` with the defaults) before using *Try it out*. The analyser and insights services are unauthenticated.
 
-The analyser polls every 5 seconds by default, so alerts appear a few seconds after seeding. To force a pass:
+A trigger on `events` raises a Postgres `NOTIFY` when new rows commit, and the
+analyser listens for it, so alerts normally appear within tens of milliseconds
+of ingestion rather than on a fixed interval. `POLL_INTERVAL_SECONDS` (default
+30) is only a safety net: `NOTIFY` is not durable and is dropped if no session
+is listening, so the interval bounds how long an event can hide if the analyser
+was restarting when it was ingested. Set `LISTEN_ENABLED=false` to fall back to
+interval-only polling.
+
+To force a pass:
 
 ```bash
 curl -X POST http://localhost:8001/v1/analyze/run
