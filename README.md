@@ -29,7 +29,7 @@ Every service serves browsable, try-it-out OpenAPI 3.1 documentation:
 | `analyser`  | http://localhost:8001/docs     | http://localhost:8001/redoc     | http://localhost:8001/openapi.json    |
 | `insights`  | http://localhost:8002/docs     | http://localhost:8002/redoc     | http://localhost:8002/openapi.json    |
 
-The ingestion endpoints require a key, so click **Authorize** in its Swagger UI and paste a secret from `API_KEYS` (`dev-secret-key` with the defaults) before using *Try it out*. The analyser and insights services are unauthenticated.
+All three services require a key, so click **Authorize** in the Swagger UI and paste a secret before using *Try it out*. Ingestion takes one from `API_KEYS` (`dev-secret-key` with the defaults); the analyser and insights take one from `OPERATOR_API_KEYS` (`dev-operator-key`). The two sets are deliberately distinct, so an agent's ingest key cannot read the alert feed or trigger a backfill. `/healthz` needs no key on any of them.
 
 A trigger on `events` raises a Postgres `NOTIFY` when new rows commit, and the
 analyser listens for it, so alerts normally appear within tens of milliseconds
@@ -42,7 +42,8 @@ interval-only polling.
 To force a pass:
 
 ```bash
-curl -X POST http://localhost:8001/v1/analyze/run
+curl -X POST http://localhost:8001/v1/analyze/run \
+  -H 'Authorization: Bearer dev-operator-key'
 ```
 
 ## Verifying it works
@@ -67,9 +68,13 @@ curl -X POST http://localhost:3000/v1/events ... # same body
 # -> 200 {"eventId":"evt-demo-1","status":"duplicate"}
 
 # Read the resulting alerts
-curl 'http://localhost:8002/v1/alerts?agent_id=agent-alpha'
-curl 'http://localhost:8002/v1/agents/agent-alpha/summary?window=24h'
-curl 'http://localhost:8002/v1/agents/agent-alpha/timeline'
+# (operator key, not the agent key used above)
+curl -H 'Authorization: Bearer dev-operator-key' \
+  'http://localhost:8002/v1/alerts?agent_id=agent-alpha'
+curl -H 'Authorization: Bearer dev-operator-key' \
+  'http://localhost:8002/v1/agents/agent-alpha/summary?window=24h'
+curl -H 'Authorization: Bearer dev-operator-key' \
+  'http://localhost:8002/v1/agents/agent-alpha/timeline'
 ```
 
 ## API surface
@@ -89,12 +94,14 @@ Errors: `400` validation, `401` bad or missing key, `413` body over `BODY_LIMIT_
 
 ### Analyser (`:8001`)
 
+Authentication: `Authorization: Bearer <secret>` from `OPERATOR_API_KEYS`, a separate set from ingestion's `API_KEYS`.
+
 | Method | Path                    | Notes                                              |
 | ------ | ----------------------- | -------------------------------------------------- |
 | `POST` | `/v1/analyze/run`       | Run one batch now, returns a `RunReport`.           |
 | `POST` | `/v1/analyze/backfill`  | Re-run rules over history, optional `since`.        |
 | `GET`  | `/v1/rules`             | List registered rules and their configuration.      |
-| `GET`  | `/healthz`              | Liveness plus poller state.                         |
+| `GET`  | `/healthz`              | Liveness plus poller state, no auth.                |
 
 Also available as a CLI inside the container:
 
@@ -106,14 +113,18 @@ docker compose exec analyser python -m analyser list-rules
 
 ### Insights (`:8002`)
 
+Authentication: `Authorization: Bearer <secret>` from `OPERATOR_API_KEYS`, a separate set from ingestion's `API_KEYS`.
+
 | Method | Path                                  | Notes                                                    |
 | ------ | ------------------------------------- | -------------------------------------------------------- |
 | `GET`  | `/v1/alerts`                          | Defaults to the last 24h. Filters below.                  |
 | `GET`  | `/v1/agents/{agent_id}/summary`       | `window` accepts `1h`, `24h`, `7d`, or explicit bounds.   |
 | `GET`  | `/v1/agents/{agent_id}/timeline`      | Events and alerts merged, ordered by time.                |
-| `GET`  | `/healthz`                            | Liveness.                                                 |
+| `GET`  | `/healthz`                            | Liveness, no auth.                                        |
 
 `/v1/alerts` filters: `since`, `until`, `agent_id`, `rule`, `severity_min`, `limit`, `offset`. Responses are a `Page` envelope of `{items, total, limit, offset}`.
+
+Errors: `400` validation, `401` bad or missing key. All three services answer the same `{error, issues}` shape.
 
 ## Detection rules
 

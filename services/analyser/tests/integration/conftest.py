@@ -145,15 +145,26 @@ def set_cursor(db: Database, seq: int) -> None:
         cur.execute("UPDATE analysis_cursor SET last_ingest_seq = %s WHERE id = 1", (seq,))
 
 
+
+#: Credential the fixtures below present. Named as a constant so the auth tests
+#: can build a client that deliberately gets it wrong.
+OPERATOR_KEYS = "test-operator:test-operator-key"
+OPERATOR_HEADERS = {"Authorization": "Bearer test-operator-key"}
+
+
 @pytest.fixture
 def client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """An HTTP client against the real app, wired to the test database.
+    """An authenticated HTTP client against the real app, on the test database.
 
     Depends on `db` so the tables are truncated before the app opens its own
     pool. The poller and the listener are off, so a pass happens only when a
     test asks for one and assertions are not racing a background loop.
+
+    Carries the operator credential by default: every `/v1` route needs one,
+    and a test about backfill should not be restating that.
     """
     monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("OPERATOR_API_KEYS", OPERATOR_KEYS)
     monkeypatch.setenv("POLLER_ENABLED", "false")
     monkeypatch.setenv("LISTEN_ENABLED", "false")
     monkeypatch.setenv("ALLOWED_DOMAINS", "github.com")
@@ -165,7 +176,7 @@ def client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterat
 
     # As a context manager, so the lifespan opens the pool and starts nothing
     # else, and closes it again on the way out.
-    with TestClient(create_app()) as test_client:
+    with TestClient(create_app(), headers=OPERATOR_HEADERS) as test_client:
         yield test_client
 
     get_config.cache_clear()
@@ -182,11 +193,12 @@ def polling_client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("POLLER_ENABLED", "true")
     monkeypatch.setenv("LISTEN_ENABLED", "true")
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("OPERATOR_API_KEYS", OPERATOR_KEYS)
     get_config.cache_clear()
 
     from analyser.api import create_app
 
-    with TestClient(create_app()) as test_client:
+    with TestClient(create_app(), headers=OPERATOR_HEADERS) as test_client:
         yield test_client
 
     get_config.cache_clear()

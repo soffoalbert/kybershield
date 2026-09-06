@@ -11,6 +11,8 @@ import sys
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from pycommon.auth import ApiKeyStore, parse_api_keys
+
 
 class BaseServiceSettings(BaseSettings):
     """Configuration common to every Python service.
@@ -31,6 +33,14 @@ class BaseServiceSettings(BaseSettings):
     port: int = 8000
     host: str = "0.0.0.0"
 
+    #: Comma-separated `clientId:secret` pairs authorising the operator APIs.
+    #:
+    #: Empty by default only so the analyser's CLI, which serves no HTTP, does
+    #: not demand a credential to run a backfill from a shell. The HTTP apps
+    #: call :meth:`build_api_key_store` at startup, which rejects a blank
+    #: value, so a server still cannot come up unauthenticated.
+    operator_api_keys: str = ""
+
     # Connection pool bounds. Small by default: three services share one
     # Postgres and the prototype is not concurrency-bound.
     db_pool_min_size: int = 1
@@ -46,6 +56,26 @@ class BaseServiceSettings(BaseSettings):
         if self.database_url.startswith("postgres://"):
             return "postgresql://" + self.database_url.removeprefix("postgres://")
         return self.database_url
+
+    def build_api_key_store(self) -> ApiKeyStore:
+        """Build the store for `operator_api_keys`.
+
+        Called at startup rather than per request, so a malformed value fails
+        the container instead of every authenticated call.
+
+        Raises:
+            ValueError: If the value is blank or malformed. Refusing to start
+                is the point: the alternative is a service that answers every
+                request with 401 and looks like a credential problem, or worse,
+                one that starts with an empty key set and is never asked for a
+                credential at all.
+        """
+        if not self.operator_api_keys.strip():
+            raise ValueError(
+                "OPERATOR_API_KEYS is required to serve the API; "
+                'set it to comma-separated "clientId:secret" pairs'
+            )
+        return ApiKeyStore(parse_api_keys(self.operator_api_keys))
 
 
 def configure_logging(level: str) -> None:

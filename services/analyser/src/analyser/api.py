@@ -2,8 +2,13 @@
 
 Mostly operational: the poller does the work, and these endpoints exist so a
 reviewer can force a pass and inspect what the rules are configured to do
-without waiting on the interval. Unauthenticated, since the service is bound to
-the Compose network and is operator-facing.
+without waiting on the interval.
+
+Authenticated with the same bearer-key scheme as ingestion, against the
+separate `OPERATOR_API_KEYS` set: `/v1/analyze/backfill` can put the whole
+event history through every rule, which is not something an agent's ingest
+credential should be able to trigger. `/healthz` stays open so an orchestrator
+can probe it without credentials.
 """
 
 from __future__ import annotations
@@ -15,8 +20,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
-from pycommon import Database, configure_logging, install_error_handlers
+from fastapi import Depends, FastAPI, Request, Response
+from pycommon import Database, configure_logging, install_error_handlers, require_api_key
 from pydantic import BaseModel
 
 from analyser.config import AnalyserConfig, get_config, rule_config
@@ -106,6 +111,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     config = get_config()
     configure_logging(config.log_level)
+    # Parsed before the pool opens: a malformed key set should fail the
+    # container, not the first request that presents a credential.
+    app.state.api_key_store = config.build_api_key_store()
 
     db = Database(
         config.psycopg_conninfo,
@@ -172,6 +180,7 @@ def create_app() -> FastAPI:
         tags=["analysis"],
         summary="Run one analysis pass now",
         response_model=RunResponse,
+        dependencies=[Depends(require_api_key)],
     )
     async def analyze_run(request: Request, drain: bool = False) -> RunResponse:
         """Force a pass without waiting for a notification or the interval.
@@ -188,6 +197,7 @@ def create_app() -> FastAPI:
         tags=["analysis"],
         summary="Re-run every rule over historical events",
         response_model=RunResponse,
+        dependencies=[Depends(require_api_key)],
     )
     async def analyze_backfill(request: Request, body: BackfillRequest) -> RunResponse:
         """Re-analyse history without moving the live cursor.
@@ -204,6 +214,7 @@ def create_app() -> FastAPI:
         tags=["rules"],
         summary="List registered detections and their live thresholds",
         response_model=list[RuleInfo],
+        dependencies=[Depends(require_api_key)],
     )
     async def list_rules(request: Request) -> list[RuleInfo]:
         """Report what the analyser is actually configured to detect."""

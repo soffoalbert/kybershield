@@ -271,15 +271,26 @@ def seeded(db: Database, now: datetime) -> dict[str, Any]:
     }
 
 
+
+#: Credential the fixtures below present. Named as a constant so the auth tests
+#: can build a client that deliberately gets it wrong.
+OPERATOR_KEYS = "test-operator:test-operator-key"
+OPERATOR_HEADERS = {"Authorization": "Bearer test-operator-key"}
+
+
 @pytest.fixture
 def client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """An httpx client against the FastAPI app, wired to the test database.
+    """An authenticated httpx client against the app, on the test database.
 
     Depends on `db` so the tables are truncated before the app opens its own
     pool. Every other setting keeps its declared default, so what the tests
     exercise is the shipped configuration.
+
+    Carries the operator credential by default: every `/v1` route needs one,
+    and a test about pagination should not be restating that.
     """
     monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("OPERATOR_API_KEYS", OPERATOR_KEYS)
     # The app reads its config through an lru_cache, so a cached instance from
     # another test would point it at the wrong database.
     get_config.cache_clear()
@@ -287,7 +298,7 @@ def client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterat
     from insights.api import create_app
 
     # As a context manager, so the lifespan opens the pool and closes it again.
-    with TestClient(create_app()) as test_client:
+    with TestClient(create_app(), headers=OPERATOR_HEADERS) as test_client:
         yield test_client
 
     get_config.cache_clear()

@@ -4,6 +4,13 @@ Exists so the analyser and insights services agree on entity shapes, severity
 ordering, and connection setup instead of each maintaining their own copy.
 """
 
+from pycommon.auth import (
+    ApiKeyStore,
+    ClientIdentity,
+    extract_bearer_token,
+    parse_api_keys,
+    require_api_key,
+)
 from pycommon.db import Database, dict_row_factory
 from pycommon.entities import (
     Alert,
@@ -18,7 +25,9 @@ from pycommon.settings import BaseServiceSettings, configure_logging
 __all__ = [
     "Alert",
     "AlertDraft",
+    "ApiKeyStore",
     "BaseServiceSettings",
+    "ClientIdentity",
     "Database",
     "Event",
     "EventType",
@@ -26,5 +35,8 @@ __all__ = [
     "ValidationFailed",
     "configure_logging",
     "dict_row_factory",
+    "extract_bearer_token",
     "install_error_handlers",
+    "parse_api_keys",
+    "require_api_key",
 ]

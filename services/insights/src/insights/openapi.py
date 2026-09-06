@@ -35,8 +35,13 @@ returns high and critical.
 or a zeroed summary with `200`, not `404`: the question was well-formed and the
 answer is "nothing".
 
-**Authentication.** None. This service is operator-facing and bound to the
-Compose network.
+**Authentication.** Every `/v1` route requires an operator API key, presented
+as `Authorization: Bearer <secret>` exactly as the ingestion service expects
+one. The credential set is separate, though: `OPERATOR_API_KEYS` rather than
+ingestion's `API_KEYS`, so an agent's ingest key cannot reach these endpoints.
+A missing, malformed, or unknown key is `401 {"error": "unauthorized"}` in
+every case, with nothing in the body to say which. `/healthz` is open, so an
+orchestrator can probe it without credentials.
 """
 
 TAGS_METADATA: list[dict[str, Any]] = [

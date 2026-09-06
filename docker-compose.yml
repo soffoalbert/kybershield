@@ -57,6 +57,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
       PORT: 8001
+      OPERATOR_API_KEYS: ${OPERATOR_API_KEYS:-demo-operator:dev-operator-key}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
       LISTEN_ENABLED: ${LISTEN_ENABLED:-true}
@@ -83,6 +84,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
       PORT: 8002
+      OPERATOR_API_KEYS: ${OPERATOR_API_KEYS:-demo-operator:dev-operator-key}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DEFAULT_WINDOW_HOURS: ${DEFAULT_WINDOW_HOURS:-24}
       DEFAULT_PAGE_SIZE: ${DEFAULT_PAGE_SIZE:-50}

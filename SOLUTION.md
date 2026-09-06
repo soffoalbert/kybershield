@@ -59,7 +59,7 @@ Four tables, defined in `db/migrations/001_init.sql` and applied by Postgres' `d
 - **Synchronous `psycopg` rather than async**, despite FastAPI. The workload is DB-bound batch processing, not high-concurrency I/O, and sync code is simpler to test. The poller runs in a thread executor so it never blocks the event loop.
 - **Severity as a Postgres enum**, so `MAX(severity)` works in SQL. Adding a level later is a migration.
 - **The insights service is read-only by convention but shares one database credential.** A separate read-only role is the obvious hardening step.
-- **No auth on the insights or analyser APIs**, since they are operator-facing and bound to the Compose network.
+- **Two credential sets rather than one.** The insights and analyser APIs use the same bearer-key scheme as ingestion, so an operator learns one credential format, but read from `OPERATOR_API_KEYS` instead of `API_KEYS`. Sharing one set would have been less to configure, at the price of letting any agent's ingest key read every finding in the estate and trigger a full backfill; one compromised agent should not become fleet-wide disclosure. `/healthz` stays open on all three, because a liveness probe that needs a secret is a liveness probe that fails for the wrong reasons.
 - **Test strategy**: rules are pure functions with heavy unit coverage; everything touching SQL is integration-tested against real Postgres, with mocked drivers used only for a couple of error paths. Slower suite, far higher confidence in the SQL, which is where the real risk lives.
 
 ## What I would do next

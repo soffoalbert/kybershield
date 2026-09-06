@@ -1,8 +1,12 @@
 """HTTP surface for insights.
 
-Read-only and unauthenticated: operator-facing and bound to the Compose
-network. Responses are the `Page` envelope or a flat model, both of which land
-in the generated OpenAPI schema at `/docs`, which is the "structured results a
+Read-only, and authenticated with the same bearer-key scheme as ingestion:
+every `/v1` route needs an `OPERATOR_API_KEYS` credential, because this service
+will hand a caller every finding in the estate. `/healthz` stays open so an
+orchestrator can probe it without credentials.
+
+Responses are the `Page` envelope or a flat model, both of which land in the
+generated OpenAPI schema at `/docs`, which is the "structured results a
 teammate could integrate into a dashboard" the brief asks for.
 """
 
@@ -13,13 +17,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response
 from pycommon import (
     Database,
     Severity,
     ValidationFailed,
     configure_logging,
     install_error_handlers,
+    require_api_key,
 )
 
 from insights.config import InsightsConfig, get_config
@@ -39,6 +44,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     config = get_config()
     configure_logging(config.log_level)
+    # Parsed before the pool opens: a malformed key set should fail the
+    # container, not the first request that presents a credential.
+    app.state.api_key_store = config.build_api_key_store()
 
     db = Database(
         config.psycopg_conninfo,
@@ -99,6 +107,7 @@ def create_app() -> FastAPI:
         tags=["alerts"],
         summary="List alerts (paged, newest first)",
         response_model=Page[AlertListItem],
+        dependencies=[Depends(require_api_key)],
     )
     async def list_alerts(
         request: Request,
@@ -139,6 +148,7 @@ def create_app() -> FastAPI:
         tags=["agents"],
         summary="Risk posture for one agent over a window",
         response_model=AgentSummary,
+        dependencies=[Depends(require_api_key)],
     )
     async def agent_summary(
         request: Request,
@@ -169,6 +179,7 @@ def create_app() -> FastAPI:
         tags=["agents"],
         summary="One agent's events and alerts merged in time order",
         response_model=Page[TimelineItem],
+        dependencies=[Depends(require_api_key)],
     )
     async def agent_timeline(
         request: Request,
