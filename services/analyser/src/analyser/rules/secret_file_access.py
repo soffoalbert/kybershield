@@ -31,11 +31,25 @@ class SecretFileAccessRule:
         """
         if event.type != "file_read":
             return []
-        if event.payload.path is None or not isinstance(event.payload.path, str):
+        path = event.payload.get("path")
+        # Covers the missing key too, since `None` is not a str.
+        if not isinstance(path, str):
             return []
-        if matches_secret_path(event.payload.path, config.secret_file_patterns):
-            return [AlertDraft(event.event_id, self.id, Severity.HIGH, event.payload.path)]
-        return []
+
+        matched = matches_secret_path(path, config.secret_path_patterns)
+        if not matched:
+            return []
+
+        return [
+            AlertDraft(
+                event_id=event.event_id,
+                agent_id=event.agent_id,
+                rule=self.id,
+                severity=Severity.HIGH,
+                summary=f"Agent read {path}, a path that suggests stored credentials",
+                details={"path": path, "matched_patterns": matched},
+            )
+        ]
 
 def matches_secret_path(path: str, patterns: list[str]) -> list[str]:
     """Return the patterns that appear in `path`, compared case-insensitively.
@@ -43,4 +57,7 @@ def matches_secret_path(path: str, patterns: list[str]) -> list[str]:
     Split out from the rule so path matching can be tested without building an
     Event.
     """
-    return [pattern for pattern in patterns if pattern in path.lower()]
+    # Both sides lowered: the defaults are lowercase, but an operator-supplied
+    # pattern like `.AWS/credentials` must behave the same way.
+    lowered = path.lower()
+    return [pattern for pattern in patterns if pattern.lower() in lowered]

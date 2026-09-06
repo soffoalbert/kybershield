@@ -27,6 +27,10 @@ PROCESS_SUBSTITUTION = re.compile(
     re.IGNORECASE,
 )
 
+#: Commands are kept in `details` but bounded, so one pathological one-liner
+#: cannot bloat the alerts table.
+COMMAND_DETAIL_LIMIT = 500
+
 PATTERNS: dict[str, re.Pattern[str]] = {
     "download_pipe_shell": DOWNLOAD_PIPE_SHELL,
     "base64_pipe_shell": BASE64_PIPE_SHELL,
@@ -61,11 +65,27 @@ class DownloadAndExecuteRule:
         """
         if event.type != "shell_command":
             return []
-        if event.payload.command is None or not isinstance(event.payload.command, str):
+        command = event.payload.get("command")
+        if not isinstance(command, str):
             return []
-        if matching_patterns(event.payload.command):
-            return [AlertDraft(event.event_id, self.id, Severity.CRITICAL, event.payload.command)]
-        return []
+
+        matched = matching_patterns(command)
+        if not matched:
+            return []
+
+        return [
+            AlertDraft(
+                event_id=event.event_id,
+                agent_id=event.agent_id,
+                rule=self.id,
+                severity=Severity.CRITICAL,
+                summary="Agent ran a shell command that downloads and executes remote code",
+                details={
+                    "command": command[:COMMAND_DETAIL_LIMIT],
+                    "matched_patterns": matched,
+                },
+            )
+        ]
 
 
 def matching_patterns(command: str) -> list[str]:

@@ -33,12 +33,25 @@ class DomainAllowlistRule:
         """
         if event.type != "http_request":
             return []
-        host = extract_host(event.url)
+        url = event.payload.get("url")
+        if not isinstance(url, str):
+            return []
+        host = extract_host(url)
         if host is None:
             return []
-        if not is_allowed(host, config.allowed_domains):
-            return [AlertDraft(event.event_id, self.id, Severity.MEDIUM, host)]
-        return []
+        if is_allowed(host, config.allowed_domains):
+            return []
+
+        return [
+            AlertDraft(
+                event_id=event.event_id,
+                agent_id=event.agent_id,
+                rule=self.id,
+                severity=Severity.MEDIUM,
+                summary=f"Agent made an HTTP request to {host}, which is not on the allowlist",
+                details={"host": host, "url": url},
+            )
+        ]
 
 
 def extract_host(url: str) -> str | None:
@@ -48,16 +61,29 @@ def extract_host(url: str) -> str | None:
     `urlparse` accepts but yields no netloc for.
     """
     try:
-        return urlparse(url).netloc.lower()
+        # `hostname`, not `netloc`: netloc keeps the port and any `user:pass@`
+        # prefix, so `github.com:443` would never match an allowlist entry.
+        host = urlparse(url).hostname
     except ValueError:
         return None
+    # A relative URL parses fine but yields no host.
+    return host.lower() if host else None
+
 
 def is_allowed(host: str, allowlist: list[str]) -> bool:
     """True if `host` equals or is a subdomain of any allowlist entry.
 
     Comparison is case-insensitive and anchored on a dot, so `evil.com` is not
     matched by an allowlist entry of `il.com`.
+
+    An empty allowlist means the rule is not configured, so everything is
+    allowed. Treating it as "nothing is allowed" would alert on every single
+    request the moment an operator forgot to set `ALLOWED_DOMAINS`.
     """
     if not allowlist:
-        return False
-    return any(host == allowed or host.endswith(f".{allowed}") for allowed in allowlist)
+        return True
+    host = host.lower()
+    return any(
+        host == entry or host.endswith(f".{entry}")
+        for entry in (allowed.lower() for allowed in allowlist)
+    )
