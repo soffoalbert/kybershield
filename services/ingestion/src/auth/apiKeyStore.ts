@@ -29,7 +29,12 @@ export class EnvApiKeyStore implements ApiKeyStore {
    * @returns The matching client, or `null` for an unknown or empty key.
    */
   resolve(presentedKey: string): ClientIdentity | null {
-    throw new Error('TODO: implement EnvApiKeyStore.resolve');
+    for (const [key, clientId] of this.keys.entries()) {
+      if (constantTimeEquals(presentedKey, key)) {
+        return { clientId };
+      }
+    }
+    return null;
   }
 }
 
@@ -44,7 +49,14 @@ export class EnvApiKeyStore implements ApiKeyStore {
  * that is acceptable, since key length is not the secret.
  */
 export function constantTimeEquals(a: string, b: string): boolean {
-  throw new Error('TODO: implement constantTimeEquals');
+  if (a.length !== b.length) {
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
 }
 
 /**
@@ -54,5 +66,12 @@ export function constantTimeEquals(a: string, b: string): boolean {
  * for a missing header, a non-bearer scheme, or an empty token.
  */
 export function extractBearerToken(header: string | undefined): string | null {
-  throw new Error('TODO: implement extractBearerToken');
+  if (!header) {
+    return null;
+  }
+  const [scheme, token] = header.split(' ');
+  if (scheme?.toLowerCase() !== 'bearer') {
+    return null;
+  }
+  return token ?? null;
 }

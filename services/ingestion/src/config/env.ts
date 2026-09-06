@@ -58,7 +58,21 @@ export interface AppConfig {
  *   has a blank secret, or reuses a secret across two client ids.
  */
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
-  throw new Error('TODO: implement loadConfig');
+  const env = EnvSchema.parse(source);
+  const apiKeys = parseApiKeys(env.API_KEYS);
+  return {
+    databaseUrl: env.DATABASE_URL,
+    apiKeys,
+    port: env.PORT,
+    host: env.HOST,
+    bodyLimitBytes: env.BODY_LIMIT_BYTES,
+    requestTimeoutMs: env.REQUEST_TIMEOUT_MS,
+    connectionTimeoutMs: env.CONNECTION_TIMEOUT_MS,
+    dbPoolMax: env.DB_POOL_MAX,
+    dbStatementTimeoutMs: env.DB_STATEMENT_TIMEOUT_MS,
+    maxBatchSize: env.MAX_BATCH_SIZE,
+    logLevel: env.LOG_LEVEL,
+  };  
 }
 
 /**
@@ -70,5 +84,14 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
  * @throws {Error} On a malformed entry, a blank secret, or a duplicate secret.
  */
 export function parseApiKeys(raw: string): Map<string, string> {
-  throw new Error('TODO: implement parseApiKeys');
+  const keys = raw.split(',');
+  const map = new Map<string, string>();
+  for (const key of keys) {
+    const [clientId, secret] = key.split(':');
+    if (!clientId || !secret) {
+      throw new Error('Invalid API key format');
+    }
+    map.set(secret, clientId);
+  }
+  return map;
 }
