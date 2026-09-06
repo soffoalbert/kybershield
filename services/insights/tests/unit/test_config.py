@@ -8,8 +8,9 @@ start rather than answer every query with an empty or inverted range.
 from __future__ import annotations
 
 import pytest
-from insights.config import InsightsConfig
 from pydantic import ValidationError
+
+from insights.config import InsightsConfig
 
 DB_URL = "postgresql://user:pass@localhost:5432/db"
 

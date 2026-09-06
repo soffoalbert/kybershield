@@ -8,7 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
 import type { AppConfig } from '../../src/config/env.js';
-import type { ApiKeyStore, Clock, EventRepository } from '../../src/domain/ports.js';
+import type { ApiKeyStore, EventRepository } from '../../src/domain/ports.js';
 import type { AgentEvent, ClientIdentity, IngestResult } from '../../src/domain/types.js';
 
 /**
@@ -18,7 +18,6 @@ import type { AgentEvent, ClientIdentity, IngestResult } from '../../src/domain/
 export class FakeEventRepository implements EventRepository {
   /** Stored events by id, exposed so tests can assert on what was written. */
   readonly events = new Map<string, AgentEvent>();
-  readonly agentsSeen = new Map<string, Date>();
   /** When set, every method rejects with this, to exercise the 503 path. */
   failWith: Error | null = null;
   healthy = true;
@@ -37,14 +36,6 @@ export class FakeEventRepository implements EventRepository {
     return Promise.all(events.map((event) => this.insertIfAbsent(event)));
   }
 
-  async upsertAgentSeen(agentId: string, seenAt: Date): Promise<void> {
-    if (this.failWith) throw this.failWith;
-    const currentSeen = this.agentsSeen.get(agentId);
-    if (!currentSeen || seenAt > currentSeen) {
-      this.agentsSeen.set(agentId, seenAt);
-    }
-  }
-
   async healthCheck(): Promise<boolean> {
     if (this.failWith) throw this.failWith;
     return this.healthy;
@@ -61,20 +52,6 @@ export class FakeApiKeyStore implements ApiKeyStore {
       return { clientId: client };
     }
     return null;
-  }
-}
-
-/** Clock pinned to a fixed instant so `received_at` assertions are stable. */
-export class FixedClock implements Clock {
-  constructor(private current: Date = new Date('2026-08-25T12:00:00Z')) {}
-
-  now(): Date {
-    return new Date(this.current);
-  }
-
-  /** Move the clock forward, for window-sensitive assertions. */
-  advance(ms: number): void {
-    this.current = new Date(this.current.getTime() + ms);
   }
 }
 
@@ -109,8 +86,9 @@ export function buildTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     dbPoolMax: 5,
     dbStatementTimeoutMs: 5_000,
     maxBatchSize: 100,
-    // Quiet, so a failing assertion is not buried in request logs.
-    logLevel: 'error',
+    // `fatal`, not `error`: several tests deliberately provoke 500s and 503s,
+    // and logging those at error level buried a green run in stack traces.
+    logLevel: 'fatal',
     ...overrides,
   };
 }
@@ -125,7 +103,6 @@ export async function buildTestApp(
   overrides: {
     repository?: FakeEventRepository;
     apiKeyStore?: ApiKeyStore;
-    clock?: Clock;
     config?: Partial<AppConfig>;
   } = {},
 ): Promise<{ app: FastifyInstance; repository: FakeEventRepository }> {
@@ -136,7 +113,6 @@ export async function buildTestApp(
     config,
     repository,
     apiKeyStore: overrides.apiKeyStore ?? new FakeApiKeyStore(config.apiKeys as Map<string, string>),
-    clock: overrides.clock ?? new FixedClock(),
   });
 
   return { app, repository };
@@ -219,9 +195,19 @@ export function eventInsertResponder(createdEventIds: string[]): QueryResponder 
     if (!query.text.includes('INSERT INTO events')) {
       return { rowCount: 1, rows: [{}] };
     }
-    const eventId = query.values[0] as string;
-    return created.has(eventId)
-      ? { rowCount: 1, rows: [{ event_id: eventId }] }
-      : { rowCount: 0, rows: [] };
+    // The batch path sends every event in one multi-row statement, so the
+    // event ids sit at the start of each 8-parameter group rather than only at
+    // index 0. The single-event path is just the one-row case of the same walk.
+    const rows: { event_id: string }[] = [];
+    for (let i = 0; i < query.values.length; i += EVENT_INSERT_PARAM_COUNT) {
+      const eventId = query.values[i] as string;
+      if (created.has(eventId)) {
+        rows.push({ event_id: eventId });
+      }
+    }
+    return { rowCount: rows.length, rows };
   };
 }
+
+/** Columns bound per event by `toEventParams`, i.e. the multi-row stride. */
+const EVENT_INSERT_PARAM_COUNT = 8;

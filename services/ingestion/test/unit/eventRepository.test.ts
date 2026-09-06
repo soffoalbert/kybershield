@@ -9,7 +9,12 @@
 
 import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
-import { PgEventRepository } from '../../src/db/eventRepository.js';
+import {
+  PgEventRepository,
+  buildInsertEventsSql,
+  buildUpsertAgentsSql,
+  collapseAgents,
+} from '../../src/db/eventRepository.js';
 import { StorageError, type AgentEvent } from '../../src/domain/types.js';
 import { FakePgPool, eventInsertResponder, type QueryResponder } from '../helpers/fakes.js';
 
@@ -225,7 +230,9 @@ describe('PgEventRepository.insertBatchIfAbsent', () => {
 
   it('persists nothing when the transaction fails', async () => {
     const { pool, repository } = withFakePool((query) => {
-      if (query.text.includes('INSERT INTO events') && query.values[0] === 'evt-2') {
+      // The batch is one multi-row INSERT, so the trigger is evt-2 appearing
+      // anywhere in the bound parameters rather than at a fixed position.
+      if (query.text.includes('INSERT INTO events') && query.values.includes('evt-2')) {
         throw new Error('insert failed');
       }
       return { rowCount: 1, rows: [{}] };
@@ -243,36 +250,64 @@ describe('PgEventRepository.insertBatchIfAbsent', () => {
   });
 });
 
-describe('PgEventRepository.upsertAgentSeen', () => {
-  it('inserts an unknown agent', async () => {
-    const { pool, repository } = withFakePool();
-    const seenAt = new Date('2026-08-25T12:00:00Z');
+describe('collapseAgents', () => {
+  const at = (iso: string, agentId = 'agent-alpha'): AgentEvent =>
+    buildEvent({ agentId, occurredAt: new Date(iso) });
 
-    await repository.upsertAgentSeen('agent-alpha', seenAt);
+  it('emits one row per agent', () => {
+    // Not an optimisation: Postgres rejects an ON CONFLICT DO UPDATE whose
+    // VALUES list names the same conflict target twice, and a batch from one
+    // agent does exactly that.
+    const collapsed = collapseAgents([
+      at('2026-08-25T12:00:00Z'),
+      at('2026-08-25T13:00:00Z'),
+      at('2026-08-25T14:00:00Z', 'agent-beta'),
+    ]);
 
-    expect(pool.client.find('INSERT INTO agents')?.values).toStrictEqual(['agent-alpha', seenAt]);
+    expect(collapsed.map((agent) => agent.agentId)).toStrictEqual(['agent-alpha', 'agent-beta']);
   });
 
-  it('never moves last_seen_at backwards', async () => {
+  it('carries the earliest and latest timestamp for an agent', () => {
+    const collapsed = collapseAgents([
+      at('2026-08-25T13:00:00Z'),
+      at('2026-08-25T11:00:00Z'),
+      at('2026-08-25T12:00:00Z'),
+    ]);
+
+    expect(collapsed[0]?.firstSeen).toStrictEqual(new Date('2026-08-25T11:00:00Z'));
+    expect(collapsed[0]?.lastSeen).toStrictEqual(new Date('2026-08-25T13:00:00Z'));
+  });
+
+  it('does not let an out-of-order batch rewind last_seen_at', () => {
+    // The newest event arrives first in the array; min/max rather than
+    // last-write-wins is what keeps the column monotonic.
+    const collapsed = collapseAgents([at('2026-08-25T15:00:00Z'), at('2026-08-25T09:00:00Z')]);
+
+    expect(collapsed[0]?.lastSeen).toStrictEqual(new Date('2026-08-25T15:00:00Z'));
+  });
+});
+
+describe('buildInsertEventsSql', () => {
+  it('numbers placeholders across every row', () => {
+    const sql = buildInsertEventsSql(2);
+
+    expect(sql).toContain('($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)');
+  });
+
+  it('keeps the conflict clause that makes a replay a no-op', () => {
+    expect(buildInsertEventsSql(1)).toContain('ON CONFLICT (event_id) DO NOTHING');
+  });
+});
+
+describe('buildUpsertAgentsSql', () => {
+  it('never moves last_seen_at backwards', () => {
     // The guarantee lives in the SQL, so this asserts the statement rather
     // than the outcome; the integration suite proves the behaviour against
     // real Postgres.
-    const { pool, repository } = withFakePool();
+    const sql = buildUpsertAgentsSql(1);
 
-    await repository.upsertAgentSeen('agent-alpha', new Date('2026-08-25T12:00:00Z'));
-
-    const upsert = pool.client.find('INSERT INTO agents')?.text ?? '';
-    expect(upsert).toContain('GREATEST(agents.last_seen_at, EXCLUDED.last_seen_at)');
-    expect(upsert).toContain('LEAST(agents.first_seen_at, EXCLUDED.first_seen_at)');
-  });
-
-  it('wraps a failure to acquire a client in a StorageError', async () => {
-    const { pool, repository } = withFakePool();
-    pool.failConnectWith = new Error('pool exhausted');
-
-    await expect(repository.upsertAgentSeen('agent-alpha', new Date())).rejects.toBeInstanceOf(
-      StorageError,
-    );
+    expect(sql).toContain('GREATEST(agents.last_seen_at, EXCLUDED.last_seen_at)');
+    expect(sql).toContain('LEAST(agents.first_seen_at, EXCLUDED.first_seen_at)');
   });
 });
 

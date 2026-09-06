@@ -125,10 +125,6 @@ class TogglableHealthRepository implements EventRepository {
     throw new Error('not used by the health routes');
   }
 
-  async upsertAgentSeen(_agentId: string, _seenAt: Date): Promise<void> {
-    throw new Error('not used by the health routes');
-  }
-
   async healthCheck(): Promise<boolean> {
     return this.healthy;
   }

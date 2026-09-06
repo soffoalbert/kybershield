@@ -29,9 +29,23 @@ services:
       HOST: 0.0.0.0
       BODY_LIMIT_BYTES: ${BODY_LIMIT_BYTES:-524288}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-10000}
+      CONNECTION_TIMEOUT_MS: ${CONNECTION_TIMEOUT_MS:-10000}
+      MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-100}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-5000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${INGESTION_PORT:-3000}:3000"
+    restart: unless-stopped
+    healthcheck:
+      # `/readyz`, not `/healthz`: it probes the database, which is what
+      # "ready for traffic" means here. No curl in the alpine image, so this
+      # goes through node.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +65,13 @@ services:
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-api.openai.com,github.com,pypi.org,registry.npmjs.org}
     ports:
       - "${ANALYSER_PORT:-8001}:8001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,8 +85,18 @@ services:
       PORT: 8002
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DEFAULT_WINDOW_HOURS: ${DEFAULT_WINDOW_HOURS:-24}
+      DEFAULT_PAGE_SIZE: ${DEFAULT_PAGE_SIZE:-50}
+      MAX_PAGE_SIZE: ${MAX_PAGE_SIZE:-500}
+      TOP_RULES_LIMIT: ${TOP_RULES_LIMIT:-5}
     ports:
       - "${INSIGHTS_PORT:-8002}:8002"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/healthz', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy

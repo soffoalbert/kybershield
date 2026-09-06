@@ -28,14 +28,6 @@ export interface EventRepository {
   insertBatchIfAbsent(events: AgentEvent[]): Promise<IngestResult[]>;
 
   /**
-   * Record that an agent was seen, inserting it if unknown.
-   *
-   * `last_seen_at` only moves forward, so an out-of-order event carrying an
-   * older timestamp must not rewind it.
-   */
-  upsertAgentSeen(agentId: string, seenAt: Date): Promise<void>;
-
-  /**
    * Return true if the database answers a trivial query.
    *
    * Must never throw; connection failures are reported as `false` so the
@@ -54,9 +46,4 @@ export interface ApiKeyStore {
    * @returns The matching client, or `null` if the key is unknown or empty.
    */
   resolve(presentedKey: string): ClientIdentity | null;
-}
-
-/** Injectable clock so tests can pin `received_at` and `last_seen_at`. */
-export interface Clock {
-  now(): Date;
 }

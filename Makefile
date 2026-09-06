@@ -11,7 +11,7 @@ INSIGHTS_PY := $(if $(wildcard services/insights/.venv/bin/python),../../service
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up down logs db-reset psql seed test test-ingestion test-analyser test-insights install
+.PHONY: help up down logs db-reset psql seed test test-ingestion test-analyser test-insights install check
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -54,3 +54,10 @@ test-analyser: ## Run the analyser test suite
 
 test-insights: ## Run the insights test suite
 	cd services/insights && $(INSIGHTS_PY) -m pytest
+
+# Lint and typecheck. Separate from `test` because it needs no database, so it
+# is the fast feedback loop and the one a reviewer can run on a clean checkout.
+check: ## Lint and typecheck every service (no database needed)
+	cd services/ingestion && npm run typecheck
+	cd services/analyser && $(ANALYSER_PY) -m ruff check .
+	cd services/insights && $(INSIGHTS_PY) -m ruff check .

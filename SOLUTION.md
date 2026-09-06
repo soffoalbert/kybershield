@@ -1,24 +1,35 @@
 # Design and Trade-offs
 
-> Skeleton. Each section lists the raw material to rewrite in your own voice before submitting.
-
 ## System overview
 
 ```mermaid
 flowchart LR
   Agent[AI Agent] -->|"POST /v1/events (Bearer key)"| Ingest[ingestion: Fastify + TS]
   Ingest -->|"INSERT ON CONFLICT DO NOTHING"| PG[(PostgreSQL)]
-  Analyser[analyser: FastAPI + poller] -->|"poll by ingest_seq cursor"| PG
+  Analyser[analyser: FastAPI + worker] -->|"LISTEN events_ingested, poll by ingest_seq cursor"| PG
   Analyser -->|"INSERT alerts ON CONFLICT DO NOTHING"| PG
   Insights[insights: FastAPI read-only] -->|SELECT| PG
   Ops[Operator] -->|"POST /v1/analyze/run"| Analyser
 ```
 
-Three independent processes sharing one Postgres instance. There is no message broker: the `events` table, ordered by a monotonic `ingest_seq`, *is* the queue.
+Three independent processes sharing one Postgres instance. There is no message broker: the `events` table, ordered by a monotonic `ingest_seq`, *is* the queue. The analyser waits on a `NOTIFY` raised by an insert trigger so it normally reacts within milliseconds, and falls back to a timed poll so a missed notification costs latency rather than correctness.
 
 ## Data model
 
-_(Describe `agents`, `events`, `alerts`, `analysis_cursor`. Call out the `payload` vs `raw` split and the two uniqueness constraints that carry the idempotency guarantees.)_
+Four tables, defined in `db/migrations/001_init.sql` and applied by Postgres' `docker-entrypoint-initdb.d` on a fresh volume.
+
+**`agents`** — one row per agent, upserted on every ingest to maintain `first_seen_at` and `last_seen_at`. It exists so insights can enumerate agents and answer "when was this one last heard from" without scanning `events`.
+
+**`events`** — the log, and the queue. Two columns matter more than the rest:
+
+- `event_id` is the primary key, and that *is* the deduplication mechanism. Ingestion writes `INSERT ... ON CONFLICT (event_id) DO NOTHING` and reports a zero row count back to the caller as a duplicate, so a client retrying after a timeout gets the same answer as the first attempt without a read-then-write race.
+- `ingest_seq` is a `BIGSERIAL` monotonic in *arrival* order, deliberately distinct from `occurred_at`, which the agent controls and can backdate. The analyser advances along `ingest_seq`, so an event that arrives an hour late still receives a fresh high sequence number and is picked up on the next pass. Ordering by `occurred_at` would have silently skipped it.
+
+`payload` and `raw` hold the same event twice on purpose. `payload` is the validated, normalised form that rules read, so a rule never has to defend against a missing field. `raw` is the envelope exactly as submitted and is never rewritten, which preserves forensic fidelity and lets historical events be re-parsed after the schema changes. The cost is roughly double the storage and two representations that can disagree.
+
+**`alerts`** — rule findings, one row per `(event, rule)` pair, enforced by `UNIQUE (event_id, rule)` and written with `ON CONFLICT DO NOTHING`. That constraint is what makes re-analysis safe: rewinding the cursor or running a backfill over events that already produced alerts is a no-op rather than a duplicate feed. `severity` is a Postgres enum declared in ascending order, so `MAX(severity)` and `severity >= 'high'` work directly in SQL.
+
+**`analysis_cursor`** — a single-row watermark holding the highest `ingest_seq` the analyser has processed, pinned to one row by `CHECK (id = 1)`. It is advanced in the same transaction as the alert inserts it accounts for, so a crash mid-batch rolls back both and the batch is simply retried. That gives at-least-once processing, which the alert unique constraint upgrades to effectively exactly-once.
 
 ## How the requirements are met
 
@@ -36,9 +47,7 @@ _(Describe `agents`, `events`, `alerts`, `analysis_cursor`. Call out the `payloa
 
 ## Trade-offs
 
-Raw material to rewrite in your own words:
-
-- **Postgres table as the queue** instead of Kafka, Redis, or NATS. Fine at prototype scale; it is a single point of contention, gives no fan-out, and puts a latency floor at the poll interval.
+- **Postgres table as the queue** instead of Kafka, Redis, or NATS. Fine at prototype scale, and `LISTEN/NOTIFY` keeps the latency floor off the poll interval. But it is a single point of contention, gives no fan-out to a second consumer group, and `NOTIFY` is fire-and-forget — a listener that is down misses the wakeup entirely, which is why the timed poll stays as a backstop rather than an optimisation.
 - **Polling by `ingest_seq` rather than `occurred_at`**, which is what makes out-of-order arrival safe. A late event with an old timestamp still gets a fresh high sequence number and is picked up. The cost is that a cursor rewind reprocesses work, mitigated by the alert unique constraint.
 - **Idempotency pushed into the database** (`PK` on `event_id`, `UNIQUE(event_id, rule)`) rather than application-level checks. Free and race-proof, but it couples correctness to the schema, and renaming a rule silently resets its dedupe history.
 - **Static env-based API keys** with constant-time comparison instead of mTLS, OIDC, or HMAC request signing. Right for a prototype, but keys are long-lived, unrotatable, and unscoped. The honest next step is HMAC-signed bodies with a timestamp, which also buys replay protection at the transport layer.
@@ -55,4 +64,11 @@ Raw material to rewrite in your own words:
 
 ## What I would do next
 
-_(Suggestions: outbox or LISTEN/NOTIFY to drop poll latency; per-agent rate limiting on ingestion; alert suppression and grouping so one noisy agent cannot flood the feed; a read-only DB role for insights; real migrations; OpenTelemetry traces spanning all three services.)_
+Roughly in the order I would actually do them:
+
+1. **Real migrations.** `initdb.d` only runs on an empty volume, so today any schema change means destroying the database. A tool with an upgrade path (Alembic, or node-pg-migrate) is the prerequisite for every other item here being deployable.
+2. **A read-only role for insights.** The service is read-only by convention and by code review, not by permission. It shares one superuser-ish credential with the two writers, so a bug or an injection there is a write. This is a `CREATE ROLE ... GRANT SELECT` and a second connection string.
+3. **Per-agent rate limiting on ingestion**, plus alert suppression and grouping. Nothing currently stops one misbehaving agent from filling the events table or drowning the alert feed, and an alert feed nobody can read is the same as no alert feed.
+4. **HMAC-signed request bodies with a timestamp**, replacing static bearer keys. Keys today are long-lived, unrotatable, and unscoped; signing also buys replay protection at the transport layer rather than relying on `event_id` deduplication to absorb it.
+5. **A shared event schema between TypeScript and Python.** The contract is currently enforced twice, by hand, in two languages, and nothing fails when the two drift. Generating both sides from one JSON Schema removes an entire class of silent bug.
+6. **OpenTelemetry traces spanning all three services**, so "why did this alert take 40 seconds" is a question with an answer. Request ids exist in ingestion logs but stop at the database.

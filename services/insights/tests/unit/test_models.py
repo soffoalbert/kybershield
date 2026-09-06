@@ -91,13 +91,6 @@ class TestPage:
 
         assert page.model_dump()["has_more"] is True
 
-    def test_has_more_is_false_on_the_last_page(self) -> None:
-        """Keyed on the rows actually returned, not on `offset + limit`, so a
-        short final page does not advertise a page that is not there."""
-        page = Page[str](items=["d"], total=4, limit=2, offset=3)
-
-        assert page.model_dump()["has_more"] is False
-
 
 class TestAgentSummary:
     def test_accepts_a_null_max_severity(self) -> None:

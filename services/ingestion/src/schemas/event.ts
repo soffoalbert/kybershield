@@ -18,8 +18,8 @@ import type { AgentEvent, Result, ValidationError } from '../domain/types.js';
  * ISO-8601 UTC timestamp.
  *
  * Rejects timestamps without an explicit offset: a naive timestamp from an
- * agent in an unknown timezone would silently corrupt the event ordering that
- * the timeline and the rapid-reads rule depend on.
+ * agent in an unknown timezone would silently corrupt the event ordering the
+ * insights timeline depends on.
  */
 export const Iso8601Utc = z
   .string()
@@ -38,10 +38,10 @@ export const EventEnvelopeSchema = z.object({
 
 export type EventEnvelope = z.infer<typeof EventEnvelopeSchema>;
 
-/** Batch submission body. */
-export const EventBatchSchema = z.object({
-  events: z.array(EventEnvelopeSchema).min(1).max(100),
-});
+// No batch-envelope schema here on purpose. The batch route checks the array
+// itself: the size limit is `MAX_BATCH_SIZE`, which a static schema cannot
+// read, and validating entries as a group would reject the whole batch over
+// one bad item instead of reporting it under `rejected`.
 
 // --- Known payload shapes -------------------------------------------------
 // `.passthrough()` on each: unrecognised fields are preserved rather than

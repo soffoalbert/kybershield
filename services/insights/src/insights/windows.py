@@ -7,7 +7,7 @@ being duplicated at each boundary.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 #: Suffix to the `timedelta` keyword it names. Doubles as the set of units the
 #: pattern below accepts, so the two cannot drift apart.
@@ -41,8 +41,8 @@ def parse_window(window: str) -> timedelta:
 def _as_utc(dt: datetime) -> datetime:
     # Accept both naive and aware, making naive as UTC aware.
     if dt.tzinfo is not None:
-        return dt.astimezone(timezone.utc)
-    return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(UTC)
+    return dt.replace(tzinfo=UTC)
 
 
 def resolve_window(
@@ -77,7 +77,7 @@ def resolve_window(
         ValueError: If `since` is after `until`, or `window` is unparseable.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     else:
         now = _as_utc(now)
 

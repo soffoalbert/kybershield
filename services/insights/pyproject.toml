@@ -43,7 +43,4 @@ ignore = [
     # PEP 695 generics on a pydantic BaseModel are not reliably supported yet;
     # Generic[T] is the safe spelling.
     "UP046",
-    # Scaffold-only: stub bodies do not yet reference every import they will
-    # need. Drop this entry once the implementations land.
-    "F401",
 ]

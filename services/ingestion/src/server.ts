@@ -3,7 +3,7 @@
  * cleanly on a signal.
  */
 
-import { buildApp, systemClock } from './app.js';
+import { buildApp } from './app.js';
 import { EnvApiKeyStore } from './auth/apiKeyStore.js';
 import { loadConfig } from './config/env.js';
 import { PgEventRepository } from './db/eventRepository.js';
@@ -16,7 +16,6 @@ const app = await buildApp({
   config,
   repository: new PgEventRepository(pool),
   apiKeyStore: new EnvApiKeyStore(config.apiKeys),
-  clock: systemClock,
 });
 
 async function shutdown(signal: string): Promise<void> {

@@ -104,10 +104,18 @@ class TestFilters:
         assert ids_of(body) == [seeded["alpha_recent"][1]]
 
     def test_rejects_an_invalid_severity(self, client: TestClient) -> None:
-        """severity_min=urgent is a validation error, not a 500."""
+        """severity_min=urgent is a validation error, not a 500.
+
+        400 with the shared `{error, issues}` envelope rather than FastAPI's
+        default 422 `{detail}`, so all three services report a client mistake
+        the same way.
+        """
         response = client.get("/v1/alerts", params={"severity_min": "urgent"})
 
-        assert response.status_code == 422
+        assert response.status_code == 400
+        body = response.json()
+        assert body["error"] == "validation_failed"
+        assert [issue["path"] for issue in body["issues"]] == ["severity_min"]
 
     def test_accepts_an_explicit_since_and_until(
         self, client: TestClient, seeded: dict[str, Any], now: datetime
@@ -192,7 +200,7 @@ class TestPagination:
         assert len(body["items"]) == 7
 
     def test_rejects_a_limit_below_one(self, client: TestClient) -> None:
-        assert client.get("/v1/alerts", params={"limit": 0}).status_code == 422
+        assert client.get("/v1/alerts", params={"limit": 0}).status_code == 400
 
     def test_offset_past_the_end_returns_an_empty_page(
         self, client: TestClient, seven_alerts: list[str]

@@ -7,6 +7,7 @@
  * HMAC-signed request bodies with a timestamp.
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { ApiKeyStore } from '../domain/ports.js';
 import type { ClientIdentity } from '../domain/types.js';
 
@@ -29,12 +30,16 @@ export class EnvApiKeyStore implements ApiKeyStore {
    * @returns The matching client, or `null` for an unknown or empty key.
    */
   resolve(presentedKey: string): ClientIdentity | null {
+    let match: ClientIdentity | null = null;
     for (const [key, clientId] of this.keys.entries()) {
+      // No `break` on a hit, and the result is recorded rather than returned:
+      // returning early would make the response time reveal how far down the
+      // configured set the matching key sits.
       if (constantTimeEquals(presentedKey, key)) {
-        return { clientId };
+        match = { clientId };
       }
     }
-    return null;
+    return match;
   }
 }
 
@@ -49,14 +54,15 @@ export class EnvApiKeyStore implements ApiKeyStore {
  * that is acceptable, since key length is not the secret.
  */
 export function constantTimeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
+  // SHA-256 first, so both operands are always 32 bytes. Comparing the raw
+  // strings would force an early return on a length mismatch, and that return
+  // is itself a timing signal that reveals the secret's length. It also lets
+  // `timingSafeEqual` be used at all: it throws on differing buffer lengths.
+  return timingSafeEqual(sha256(a), sha256(b));
+}
+
+function sha256(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
 }
 
 /**

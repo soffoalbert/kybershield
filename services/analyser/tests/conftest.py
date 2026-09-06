@@ -32,7 +32,13 @@ DUMMY_DATABASE_URL = "postgresql://user:pass@localhost:5432/unused"
 
 #: Deliberately not the database docker-compose points the services at; see
 #: :func:`db_url`.
-DEFAULT_TEST_DATABASE_URL = "postgresql://kybershield:kybershield@localhost:5432/kybershield_test"
+#:
+#: Suffixed per suite rather than a shared `kybershield_test`: every suite
+#: truncates between tests, so two running at once wipe each other's fixtures
+#: and fail in ways that look like product bugs rather than interference.
+DEFAULT_TEST_DATABASE_URL = (
+    "postgresql://kybershield:kybershield@localhost:5432/kybershield_test_analyser"
+)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 

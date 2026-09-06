@@ -15,5 +15,10 @@ COPY services/analyser/pyproject.toml /app/services/analyser/
 COPY services/analyser/src /app/services/analyser/src
 RUN pip install /app/services/analyser
 
+# Drop privileges, matching the ingestion image. Done after the installs so
+# pip still writes to site-packages as root.
+RUN useradd --system --create-home --uid 10001 app
+USER app
+
 EXPOSE 8001
 CMD ["uvicorn", "analyser.api:app", "--host", "0.0.0.0", "--port", "8001"]

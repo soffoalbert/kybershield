@@ -44,7 +44,4 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = [
     # typer's documented idiom is a call in the argument default.
     "B008",
-    # Scaffold-only: stub bodies do not yet reference every import they will
-    # need. Drop this entry once the implementations land.
-    "F401",
 ]

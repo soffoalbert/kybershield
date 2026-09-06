@@ -3,7 +3,7 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify';
-import type { ApiKeyStore, Clock, EventRepository } from '../domain/ports.js';
+import type { ApiKeyStore, EventRepository } from '../domain/ports.js';
 import type { AgentEvent, ValidationIssue } from '../domain/types.js';
 import { requireApiKey } from '../plugins/auth.js';
 import { parseEnvelope } from '../schemas/event.js';
@@ -11,7 +11,6 @@ import { POST_EVENTS_BATCH_SCHEMA, POST_EVENT_SCHEMA } from '../schemas/openapi.
 
 export interface EventRoutesOptions {
   repository: EventRepository;
-  clock: Clock;
   maxBatchSize: number;
   /** Bound into the per-route `requireApiKey` preHandler below. */
   apiKeyStore: ApiKeyStore;
@@ -20,8 +19,7 @@ export interface EventRoutesOptions {
 /**
  * Register `POST /v1/events` and `POST /v1/events/batch`.
  *
- * Both require authentication; the caller registers {@link authPlugin} in the
- * same scope.
+ * Both require authentication, bound per route as a `preHandler`.
  *
  * `POST /v1/events`
  * - `201 {eventId, status:"created"}` when the event was stored.
@@ -45,6 +43,15 @@ export interface EventRoutesOptions {
  *   `events`, or over the size limit).
  */
 export const eventRoutes: FastifyPluginAsync<EventRoutesOptions> = async (app, opts) => {
+  // The `body` schemas on these routes are documentation: they give Swagger UI
+  // a request shape and a "try it out" template. Letting AJV enforce them too
+  // would put two validators with different rules on the same field, and would
+  // reject a whole batch over one bad entry, which is the opposite of the
+  // per-item `rejected` reporting below. `parseEnvelope` is the sole authority,
+  // so validation is compiled away to a no-op here. Scoped to this plugin, so
+  // any future route registered elsewhere still validates normally.
+  app.setValidatorCompiler(() => (data) => ({ value: data }));
+
   app.post('/v1/events', {
     schema: POST_EVENT_SCHEMA,
     preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })],

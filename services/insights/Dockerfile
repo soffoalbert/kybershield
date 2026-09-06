@@ -15,5 +15,10 @@ COPY services/insights/pyproject.toml /app/services/insights/
 COPY services/insights/src /app/services/insights/src
 RUN pip install /app/services/insights
 
+# Drop privileges, matching the ingestion image. Done after the installs so
+# pip still writes to site-packages as root.
+RUN useradd --system --create-home --uid 10001 app
+USER app
+
 EXPOSE 8002
 CMD ["uvicorn", "insights.api:app", "--host", "0.0.0.0", "--port", "8002"]

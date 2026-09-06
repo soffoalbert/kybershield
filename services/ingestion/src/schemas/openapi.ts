@@ -7,9 +7,16 @@
  * responses against these, so a handler cannot accidentally leak a field that
  * is not documented here.
  *
- * Request bodies are documented but deliberately *not* validated by Fastify:
- * `parseEnvelope` owns validation so that the batch endpoint can report
- * per-item failures by index, which a whole-body schema rejection cannot do.
+ * Request bodies are documented here but deliberately *not* validated by
+ * Fastify. Attaching a `body` schema to a route makes AJV reject the request
+ * before the handler runs, which would put two validators with two different
+ * rule sets on the same field and rob the batch endpoint of its per-item
+ * `rejected` reporting. `parseEnvelope` is the single validation authority;
+ * these schemas describe the contract and drive Swagger UI.
+ *
+ * `eventRoutes` installs a pass-through `validatorCompiler` to enforce that:
+ * the `body` entries below reach @fastify/swagger and Swagger UI, but never
+ * AJV.
  */
 
 /** Shared component schemas, registered once and referenced by `$ref`. */

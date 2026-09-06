@@ -57,6 +57,73 @@ export const UPSERT_AGENT_SQL = `
         first_seen_at = LEAST(agents.first_seen_at, EXCLUDED.first_seen_at)
 `;
 
+/** Placeholders `($1, $2, ..., $width)`, `($width+1, ...)`, ... for `rows` rows. */
+function valuesPlaceholders(rows: number, width: number): string {
+  return Array.from({ length: rows }, (_, row) => {
+    const params = Array.from({ length: width }, (_, col) => `$${row * width + col + 1}`);
+    return `(${params.join(', ')})`;
+  }).join(', ');
+}
+
+/**
+ * Multi-row form of {@link UPSERT_AGENT_SQL}.
+ *
+ * Takes explicit first and last seen columns rather than reusing one timestamp
+ * for both, because {@link collapseAgents} has already reduced a batch to one
+ * row per agent and needs to carry that agent's earliest and latest event.
+ */
+export function buildUpsertAgentsSql(rowCount: number): string {
+  return `
+    INSERT INTO agents (agent_id, first_seen_at, last_seen_at)
+    VALUES ${valuesPlaceholders(rowCount, 3)}
+    ON CONFLICT (agent_id) DO UPDATE
+      SET last_seen_at  = GREATEST(agents.last_seen_at, EXCLUDED.last_seen_at),
+          first_seen_at = LEAST(agents.first_seen_at, EXCLUDED.first_seen_at)
+  `;
+}
+
+/** Multi-row form of {@link INSERT_EVENT_SQL}. */
+export function buildInsertEventsSql(rowCount: number): string {
+  return `
+    INSERT INTO events (
+      event_id, agent_id, occurred_at, type, payload, raw, tags, client_id
+    )
+    VALUES ${valuesPlaceholders(rowCount, 8)}
+    ON CONFLICT (event_id) DO NOTHING
+    RETURNING event_id
+  `;
+}
+
+/**
+ * Reduce a batch to one row per agent, carrying its earliest and latest
+ * `occurredAt`.
+ *
+ * Required, not an optimisation: Postgres rejects an `ON CONFLICT DO UPDATE`
+ * whose VALUES list names the same conflict target twice ("cannot affect row a
+ * second time"), and a batch from one agent does exactly that.
+ */
+export function collapseAgents(
+  events: AgentEvent[],
+): { agentId: string; firstSeen: Date; lastSeen: Date }[] {
+  const byAgent = new Map<string, { agentId: string; firstSeen: Date; lastSeen: Date }>();
+  for (const event of events) {
+    const seen = byAgent.get(event.agentId);
+    if (!seen) {
+      byAgent.set(event.agentId, {
+        agentId: event.agentId,
+        firstSeen: event.occurredAt,
+        lastSeen: event.occurredAt,
+      });
+      continue;
+    }
+    // Min and max rather than last-write-wins: a batch may arrive out of
+    // chronological order, and `last_seen_at` must not rewind.
+    if (event.occurredAt < seen.firstSeen) seen.firstSeen = event.occurredAt;
+    if (event.occurredAt > seen.lastSeen) seen.lastSeen = event.occurredAt;
+  }
+  return [...byAgent.values()];
+}
+
 export class PgEventRepository implements EventRepository {
   constructor(private readonly pool: Pool) {}
 
@@ -112,18 +179,26 @@ export class PgEventRepository implements EventRepository {
       }
     }
 
+    const unique = [...firstOccurrence.values()];
+
     try {
+      const agents = collapseAgents(unique);
+
       const created = await withTransaction(this.pool, async (client) => {
-        const inserted = new Set<string>();
-        for (const event of firstOccurrence.values()) {
-          // Same foreign key ordering as the single-event path.
-          await client.query(UPSERT_AGENT_SQL, [event.agentId, event.occurredAt]);
-          const result = await client.query(INSERT_EVENT_SQL, toEventParams(event));
-          if (result.rowCount === 1) {
-            inserted.add(event.eventId);
-          }
-        }
-        return inserted;
+        // Two multi-row statements rather than two per event: a 100-event
+        // batch used to be 200 sequential round trips, which defeats the point
+        // of offering a batch endpoint at all.
+        // Agents first, for the same foreign key ordering as the single path.
+        await client.query(
+          buildUpsertAgentsSql(agents.length),
+          agents.flatMap((agent) => [agent.agentId, agent.firstSeen, agent.lastSeen]),
+        );
+        const result = await client.query(
+          buildInsertEventsSql(unique.length),
+          unique.flatMap(toEventParams),
+        );
+        // RETURNING yields only the rows that survived ON CONFLICT.
+        return new Set<string>(result.rows.map((row) => row.event_id as string));
       });
 
       // One result per input event, in input order. A repeat inside the batch
@@ -139,25 +214,6 @@ export class PgEventRepository implements EventRepository {
       });
     } catch (error) {
       throw new StorageError('Failed to insert events', error);
-    }
-  }
-
-  /**
-   * Record that an agent was seen at `seenAt`, inserting it if unknown.
-   *
-   * @throws {StorageError} On any driver error.
-   */
-  async upsertAgentSeen(agentId: string, seenAt: Date): Promise<void> {
-    let client;
-    try {
-      // Inside the try, so a failure to acquire a client surfaces as a
-      // StorageError like every other driver failure on this port.
-      client = await this.pool.connect();
-      await client.query(UPSERT_AGENT_SQL, [agentId, seenAt]);
-    } catch (error) {
-      throw new StorageError('Failed to upsert agent seen', error);
-    } finally {
-      client?.release();
     }
   }
 

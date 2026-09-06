@@ -12,11 +12,11 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import type { FastifyInstance } from 'fastify';
-import { buildApp, systemClock } from '../../src/app.js';
+import { buildApp } from '../../src/app.js';
 import { EnvApiKeyStore } from '../../src/auth/apiKeyStore.js';
 import type { AppConfig } from '../../src/config/env.js';
 import { PgEventRepository } from '../../src/db/eventRepository.js';
-import type { Clock, EventRepository } from '../../src/domain/ports.js';
+import type { EventRepository } from '../../src/domain/ports.js';
 
 /**
  * Connection string for the test database.
@@ -24,10 +24,14 @@ import type { Clock, EventRepository } from '../../src/domain/ports.js';
  * A database of its own, not the compose `kybershield` one: `truncateAll`
  * would otherwise wipe whatever the developer was looking at, and the running
  * analyser would be polling the same tables a test is asserting on.
+ *
+ * Suffixed per suite rather than a shared `kybershield_test`: every suite
+ * truncates between tests, so two running at once wipe each other's fixtures
+ * and fail in ways that look like product bugs rather than interference.
  */
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
-  'postgres://kybershield:kybershield@localhost:5432/kybershield_test';
+  'postgres://kybershield:kybershield@localhost:5432/kybershield_test_ingestion';
 
 /** Server-level connection used to create the test database if it is absent. */
 const MAINTENANCE_DATABASE_URL =
@@ -145,7 +149,6 @@ export async function truncateAll(pool: Pool): Promise<void> {
 export interface IntegrationAppOptions {
   bodyLimitBytes?: number;
   maxBatchSize?: number;
-  clock?: Clock;
   /**
    * Replaces the Postgres repository. Only for behaviour that a real database
    * cannot exhibit on demand, such as recovering from an outage mid-suite.
@@ -177,15 +180,15 @@ export async function buildIntegrationApp(
     dbPoolMax: 5,
     dbStatementTimeoutMs: 5_000,
     maxBatchSize: options.maxBatchSize ?? 100,
-    // Quiet, so a failing assertion is not buried in request logs.
-    logLevel: 'error',
+    // `fatal`, not `error`: several tests deliberately provoke 500s and 503s,
+    // and logging those at error level buried a green run in stack traces.
+    logLevel: 'fatal',
   };
 
   return buildApp({
     config,
     repository: options.repository ?? new PgEventRepository(pool),
     apiKeyStore: new EnvApiKeyStore(config.apiKeys),
-    clock: options.clock ?? systemClock,
   });
 }
 

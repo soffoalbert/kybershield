@@ -9,7 +9,7 @@
 import fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppConfig } from './config/env.js';
-import type { ApiKeyStore, Clock, EventRepository } from './domain/ports.js';
+import type { ApiKeyStore, EventRepository } from './domain/ports.js';
 import { StorageError } from './domain/types.js';
 import { registerDocs } from './plugins/docs.js';
 import { eventRoutes } from './routes/events.js';
@@ -19,14 +19,7 @@ export interface AppDependencies {
   config: AppConfig;
   repository: EventRepository;
   apiKeyStore: ApiKeyStore;
-  /** Defaults to a real system clock when omitted. */
-  clock?: Clock;
 }
-
-/** Clock backed by `Date.now()`. */
-export const systemClock: Clock = {
-  now: () => new Date(),
-};
 
 /**
  * Build a configured, unstarted Fastify instance.
@@ -38,7 +31,7 @@ export const systemClock: Clock = {
  *   holding a connection open indefinitely.
  * - Configure the pino logger at `config.logLevel` with a per-request id, and
  *   redact the `authorization` header so credentials never reach the logs.
- * - Register {@link authPlugin}, {@link healthRoutes}, and {@link eventRoutes}.
+ * - Register {@link healthRoutes} and {@link eventRoutes}.
  * - Install a `setErrorHandler` that maps:
  *     - zod / validation failures to `400` with the field issues,
  *     - `StorageError` to `503 {error:"storage_unavailable"}`, logging the
@@ -100,9 +93,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       return;
     }
 
-    // Fastify's own JSON-schema check, which runs before the handler. Mapped
-    // to the same body shape the handler's zod validation produces, so a
-    // client sees one contract regardless of which layer rejected it.
+    // Fastify's own JSON-schema check. The event routes compile it away so
+    // `parseEnvelope` is the only validator there, but a route registered
+    // without that opt-out still goes through AJV, so this maps it to the same
+    // body shape zod produces and a client sees one contract either way.
     if (error.code === 'FST_ERR_VALIDATION') {
       const issues = (error.validation ?? []).map((entry) => ({
         // AJV reports a missing property against the parent object, so the
@@ -145,14 +139,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     reply.code(404).send({ error: 'not_found' });
   });
 
-  // `authPlugin` is deliberately not registered: `eventRoutes` binds
-  // `requireApiKey` per route, which keeps auth visible at each endpoint and
-  // leaves the health probes unauthenticated.
+  // `eventRoutes` binds `requireApiKey` per route rather than adding a global
+  // hook, which keeps auth visible at each endpoint and leaves the health
+  // probes unauthenticated.
   await app.register(healthRoutes, { repository: deps.repository });
   await app.register(eventRoutes, {
     repository: deps.repository,
     apiKeyStore: deps.apiKeyStore,
-    clock: deps.clock ?? systemClock,
     maxBatchSize: deps.config.maxBatchSize,
   });
 
