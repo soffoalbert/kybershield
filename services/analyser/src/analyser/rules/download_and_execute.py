@@ -6,7 +6,7 @@ import re
 
 from pycommon import AlertDraft, Event, Severity
 
-from analyser.rules.base import RuleContext
+from analyser.config import AnalyserConfig
 
 #: Fetch piped straight into a shell: `curl https://x | sh`, `wget -qO- x | bash`.
 #: Tolerates flags and whitespace between the fetch and the pipe.
@@ -50,7 +50,7 @@ class DownloadAndExecuteRule:
     id = "download_and_execute"
     description = "Shell command that downloads remote content and executes it"
 
-    def evaluate(self, event: Event, ctx: RuleContext) -> list[AlertDraft]:
+    def evaluate(self, event: Event, config: AnalyserConfig) -> list[AlertDraft]:
         """Return one alert if any pattern matches `payload.command`.
 
         Ignores non-`shell_command` events and a missing or non-string
@@ -59,9 +59,15 @@ class DownloadAndExecuteRule:
         `details.command` truncated to 500 characters, since it is the whole
         point of the alert and is not itself a credential.
         """
-        raise NotImplementedError
+        if event.type != "shell_command":
+            return []
+        if event.payload.command is None or not isinstance(event.payload.command, str):
+            return []
+        if matching_patterns(event.payload.command):
+            return [AlertDraft(event.event_id, self.id, Severity.CRITICAL, event.payload.command)]
+        return []
 
 
 def matching_patterns(command: str) -> list[str]:
     """Return the names of the patterns in :data:`PATTERNS` that match."""
-    raise NotImplementedError
+    return [name for name, pattern in PATTERNS.items() if pattern.search(command)]

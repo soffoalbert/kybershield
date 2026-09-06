@@ -36,19 +36,6 @@ INSERT_ALERTS_SQL = """
     RETURNING alert_id
 """
 
-#: Lookback for the rapid_secret_reads rule. Over `occurred_at`, because the
-#: rule reasons about when activity happened, not when it was received.
-RECENT_EVENTS_SQL = """
-    SELECT event_id, ingest_seq, agent_id, occurred_at, received_at,
-           type, payload, raw, tags, client_id
-      FROM events
-     WHERE agent_id = %(agent_id)s
-       AND type = %(type)s
-       AND occurred_at > %(window_start)s
-       AND occurred_at <= %(before)s
-     ORDER BY occurred_at
-"""
-
 
 class AnalysisRepository(Protocol):
     """Everything the engine needs from storage."""
@@ -89,12 +76,6 @@ class AnalysisRepository(Protocol):
         """
         ...
 
-    def recent_events_for_agent(
-        self, agent_id: str, type_: str, within: timedelta, before: datetime
-    ) -> list[Event]:
-        """Return one agent's events of a type in `(before - within, before]`."""
-        ...
-
 
 class PgAnalysisRepository:
     """PostgreSQL implementation of :class:`AnalysisRepository`."""
@@ -124,12 +105,6 @@ class PgAnalysisRepository:
 
     def set_cursor(self, seq: int) -> None:
         """Write `analysis_cursor.last_ingest_seq` and bump `updated_at`."""
-        raise NotImplementedError
-
-    def recent_events_for_agent(
-        self, agent_id: str, type_: str, within: timedelta, before: datetime
-    ) -> list[Event]:
-        """Run :data:`RECENT_EVENTS_SQL` and map rows to Events."""
         raise NotImplementedError
 
     def process_batch_atomically(

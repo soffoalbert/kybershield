@@ -47,8 +47,6 @@ services:
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-5}
       BATCH_SIZE: ${BATCH_SIZE:-200}
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-api.openai.com,github.com,pypi.org,registry.npmjs.org}
-      RAPID_READ_THRESHOLD: ${RAPID_READ_THRESHOLD:-3}
-      RAPID_READ_WINDOW_SECONDS: ${RAPID_READ_WINDOW_SECONDS:-60}
     ports:
       - "${ANALYSER_PORT:-8001}:8001"
     depends_on:

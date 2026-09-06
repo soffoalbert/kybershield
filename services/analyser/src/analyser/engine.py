@@ -39,21 +39,6 @@ class RunReport:
         raise NotImplementedError
 
 
-class DbRuleContext:
-    """:class:`RuleContext` backed by the repository."""
-
-    def __init__(self, repo: AnalysisRepository, config: AnalyserConfig) -> None:
-        raise NotImplementedError
-
-    config: AnalyserConfig
-
-    def recent_events_for_agent(
-        self, agent_id: str, type_: str, within: timedelta, before: datetime
-    ) -> list[Event]:
-        """Delegate the lookback to the repository."""
-        raise NotImplementedError
-
-
 class AnalysisEngine:
     """Runs the rule set over events and persists the resulting alerts."""
 
@@ -61,14 +46,14 @@ class AnalysisEngine:
         self,
         rules: Sequence[Rule],
         repo: AnalysisRepository,
-        ctx: object,
+        config: AnalyserConfig,
         batch_size: int = 200,
     ) -> None:
         """
         Args:
             rules: Detections to run, in order.
             repo: Storage access.
-            ctx: A :class:`RuleContext`, normally :class:`DbRuleContext`.
+            config: Passed to every rule; holds the tunable thresholds.
             batch_size: Events claimed per pass.
         """
         raise NotImplementedError

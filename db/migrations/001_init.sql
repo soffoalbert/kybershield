@@ -54,8 +54,6 @@ CREATE TABLE events (
 CREATE INDEX events_agent_occurred_idx ON events (agent_id, occurred_at DESC);
 CREATE INDEX events_type_idx           ON events (type);
 CREATE INDEX events_occurred_idx       ON events (occurred_at DESC);
--- Supports the rapid_secret_reads rule's lookback over one agent's reads.
-CREATE INDEX events_agent_type_occurred_idx ON events (agent_id, type, occurred_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- alerts

@@ -34,34 +34,6 @@ def make_event(
     raise NotImplementedError
 
 
-class FakeRuleContext:
-    """RuleContext returning a canned event history.
-
-    Lets the stateful rapid-reads rule be tested with no database and no clock
-    manipulation.
-    """
-
-    def __init__(
-        self,
-        config: AnalyserConfig | None = None,
-        history: list[Event] | None = None,
-    ) -> None:
-        raise NotImplementedError
-
-    config: AnalyserConfig
-
-    def recent_events_for_agent(
-        self, agent_id: str, type_: str, within: timedelta, before: datetime
-    ) -> list[Event]:
-        """Filter the canned history the same way the real query would.
-
-        Applies the agent, type, and `(before - within, before]` window filters
-        in Python, so a test that seeds history gets the same slice the SQL
-        would return.
-        """
-        raise NotImplementedError
-
-
 class FakeAnalysisRepository:
     """In-memory AnalysisRepository for engine unit tests."""
 
@@ -81,20 +53,14 @@ class FakeAnalysisRepository:
     def insert_alerts_ignore_dupes(self, drafts: Sequence[AlertDraft]) -> int: ...
     def get_cursor(self) -> int: ...
     def set_cursor(self, seq: int) -> None: ...
-    def recent_events_for_agent(
-        self, agent_id: str, type_: str, within: timedelta, before: datetime
-    ) -> list[Event]: ...
 
 
 @pytest.fixture
 def config() -> AnalyserConfig:
-    """An AnalyserConfig with test-friendly thresholds, built without env vars."""
-    raise NotImplementedError
+    """An AnalyserConfig with test-friendly thresholds, built without env vars.
 
-
-@pytest.fixture
-def ctx(config: AnalyserConfig) -> FakeRuleContext:
-    """A FakeRuleContext with an empty history."""
+    Rules take this directly, so a rule unit test needs nothing else.
+    """
     raise NotImplementedError
 
 

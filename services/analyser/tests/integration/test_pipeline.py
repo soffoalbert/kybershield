@@ -68,19 +68,6 @@ class TestConcurrency:
         pytest.skip("TODO: implement")
 
 
-class TestRapidReadsAgainstRealHistory:
-    def test_fires_using_history_read_from_the_database(self) -> None:
-        """Seed three sensitive reads in the window and assert the alert
-        appears, proving RECENT_EVENTS_SQL's filters match what the fake
-        context does in the unit tests."""
-        pytest.skip("TODO: implement")
-
-    def test_does_not_aggregate_across_agents_in_sql(self) -> None:
-        """The agent filter in the lookback query, verified in the database
-        rather than in the fake."""
-        pytest.skip("TODO: implement")
-
-
 class TestBackfill:
     def test_reanalyses_all_history(self) -> None:
         pytest.skip("TODO: implement")

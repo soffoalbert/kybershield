@@ -122,8 +122,10 @@ docker compose exec insights python -m insights timeline agent-alpha --json
 | `secret_file_access`    | `high`     | Paths containing `.env`, `id_rsa`, `.aws/credentials`, `.ssh/`  |
 | `domain_allowlist`      | `medium`   | `http_request` to a host outside `ALLOWED_DOMAINS`              |
 | `download_and_execute`  | `critical` | `curl`/`wget` piped to a shell, `base64 -d` piped to a shell    |
-| `rapid_secret_reads`    | `high`     | `RAPID_READ_THRESHOLD` sensitive reads within the window        |
-| `privileged_tool_call`  | `high`     | Tool calls requesting `sudo`, `chmod 777`, or broad filesystem  |
+
+Three rules, one per event type of interest (`file_read`, `http_request`,
+`shell_command`). All are stateless: each sees a single event and the config,
+never storage.
 
 Thresholds and the allowlist are environment-configured; see `.env.example`.
 

@@ -2,7 +2,7 @@
 
 Everything a rule might reasonably need to tune lives here rather than in the
 rule bodies, so thresholds and allowlists are operator-adjustable without a
-code change. Rules read it through `RuleContext.config`.
+code change. The engine passes it to every rule's `evaluate`.
 """
 
 from __future__ import annotations
@@ -27,10 +27,6 @@ class AnalyserConfig(BaseServiceSettings):
 
     # --- domain_allowlist rule ---
     allowed_domains: list[str] = []
-
-    # --- rapid_secret_reads rule ---
-    rapid_read_threshold: int = 3
-    rapid_read_window_seconds: int = 60
 
     # --- secret_file_access rule ---
     # Case-insensitive substrings matched against the file path.
