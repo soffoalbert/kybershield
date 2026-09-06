@@ -62,16 +62,16 @@ export function constantTimeEquals(a: string, b: string): boolean {
 /**
  * Extract the bearer token from an Authorization header value.
  *
- * Accepts `Bearer <token>` case-insensitively on the scheme. Returns `null`
- * for a missing header, a non-bearer scheme, or an empty token.
+ * Accepts `Bearer <token>` case-insensitively on the scheme, and tolerates
+ * surrounding or repeated whitespace, which some HTTP clients introduce.
+ * Returns `null` for a missing header, a non-bearer scheme, or an empty token.
  */
 export function extractBearerToken(header: string | undefined): string | null {
   if (!header) {
     return null;
   }
-  const [scheme, token] = header.split(' ');
-  if (scheme?.toLowerCase() !== 'bearer') {
-    return null;
-  }
-  return token ?? null;
+  // `\S+` rather than `.+` so a token is never returned with padding, and a
+  // header that is nothing but "Bearer" and spaces fails to match.
+  const match = /^\s*bearer\s+(\S+)\s*$/i.exec(header);
+  return match?.[1] ?? null;
 }

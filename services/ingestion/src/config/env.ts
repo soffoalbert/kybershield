@@ -84,14 +84,39 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
  * @throws {Error} On a malformed entry, a blank secret, or a duplicate secret.
  */
 export function parseApiKeys(raw: string): Map<string, string> {
-  const keys = raw.split(',');
   const map = new Map<string, string>();
-  for (const key of keys) {
-    const [clientId, secret] = key.split(':');
-    if (!clientId || !secret) {
-      throw new Error('Invalid API key format');
+  raw.split(',').forEach((entry, index) => {
+    const trimmed = entry.trim();
+    // Position rather than content in every message below: this text reaches
+    // stderr on a failed boot, and the entry contains a secret.
+    const position = `API_KEYS entry ${index + 1}`;
+
+    // Split on the first colon only, so a base64 or URL-shaped secret that
+    // contains colons survives intact instead of being silently truncated.
+    const separator = trimmed.indexOf(':');
+    if (separator === -1) {
+      throw new Error(`${position} is not in "clientId:secret" form`);
     }
+
+    const clientId = trimmed.slice(0, separator).trim();
+    const secret = trimmed.slice(separator + 1).trim();
+    if (!clientId) {
+      throw new Error(`${position} has a blank client id`);
+    }
+    if (!secret) {
+      throw new Error(`${position} has a blank secret`);
+    }
+
+    // A reused secret makes the map ambiguous: the last entry parsed would win
+    // and every event from the other client would be misattributed.
+    const existing = map.get(secret);
+    if (existing) {
+      throw new Error(
+        `${position} reuses a secret already assigned to client "${existing}"`,
+      );
+    }
+
     map.set(secret, clientId);
-  }
+  });
   return map;
 }
