@@ -8,7 +8,7 @@ Three services over one PostgreSQL database:
 | ----------- | ---------------------------- | ---- | ------------------------------------------------------- |
 | `ingestion` | Node.js 22, Fastify 5, TS    | 3000 | Authenticated, idempotent event intake                   |
 | `analyser`  | Python 3.12, FastAPI         | 8001 | Rule-based risk analysis, LISTEN/NOTIFY driven + manual run |
-| `insights`  | Python 3.12, FastAPI + Typer | 8002 | Read-only alert queries, agent summaries, timelines      |
+| `insights`  | Python 3.12, FastAPI          | 8002 | Read-only alert queries, agent summaries, timelines      |
 
 ## Quick start
 
@@ -114,14 +114,6 @@ docker compose exec analyser python -m analyser list-rules
 | `GET`  | `/healthz`                            | Liveness.                                                 |
 
 `/v1/alerts` filters: `since`, `until`, `agent_id`, `rule`, `severity_min`, `limit`, `offset`. Responses are a `Page` envelope of `{items, total, limit, offset}`.
-
-CLI mirror:
-
-```bash
-docker compose exec insights python -m insights alerts --agent-id agent-alpha
-docker compose exec insights python -m insights summary agent-alpha --window 24h
-docker compose exec insights python -m insights timeline agent-alpha --json
-```
 
 ## Detection rules
 

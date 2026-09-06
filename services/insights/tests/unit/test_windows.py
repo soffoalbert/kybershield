@@ -1,6 +1,6 @@
 """Time window parsing and resolution.
 
-Pure functions shared by the HTTP API and the CLI, so they are worth pinning
+Pure functions behind every endpoint's time range, so they are worth pinning
 precisely: an off-by-one here silently changes what every endpoint returns.
 """
 
@@ -62,7 +62,7 @@ class TestResolveWindow:
         pytest.skip("TODO: implement")
 
     def test_treats_a_naive_datetime_as_utc(self) -> None:
-        """A teammate typing 2026-08-25T10:00:00 on the CLI plainly means UTC;
+        """A teammate passing 2026-08-25T10:00:00 plainly means UTC;
         rejecting it would be pedantic, and guessing local time would be
         wrong."""
         pytest.skip("TODO: implement")

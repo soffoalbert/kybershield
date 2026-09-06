@@ -24,45 +24,222 @@ async def lifespan(app: FastAPI):
 
     The repository is stored on `app.state` so handlers and tests share it.
     """
-    raise NotImplementedError
+    # Assume use of an async database connection pool (e.g., asyncpg)
+    # Replace with real repository/database as appropriate.
+    from insights.repository import create_repository
 
+    app.state.repository = await create_repository()
+    try:
+        yield
+    finally:
+        await app.state.repository.aclose()
 
 def create_app() -> FastAPI:
-    """Build the FastAPI application.
+    """Build the FastAPI application."""
+    from fastapi import HTTPException, status
+    from fastapi.responses import JSONResponse
+    from typing import List, Optional
+    from insights.repository import get_repository
+    from insights.models import (
+        Page,
+        AlertListItem,
+        AgentSummary,
+        HealthResponse,
+        TimelineItem,
+    )
+    from pydantic import ValidationError
 
-    Construct with ``FastAPI(lifespan=lifespan, **APP_METADATA)``. That gives
-    interactive Swagger UI at ``/docs`` and ReDoc at ``/redoc`` for free, with
-    the prose and tag groups defined in :mod:`insights.openapi`.
+    app = FastAPI(lifespan=lifespan, **APP_METADATA)
 
-    Give every route a ``tags=[...]``, a ``summary=``, and a
-    ``response_model=`` from :mod:`insights.models`; the response model is what
-    turns the generated document into something a dashboard client can be
-    generated from. Declare query parameters with ``Query(..., description=)``
-    so the filters are self-documenting in the UI.
+    # Constants
+    default_window_hours = 24
+    max_page_size = 500
 
-    Routes:
-        GET /v1/alerts
-            Query: since, until, window, agent_id, rule, severity_min, limit,
-            offset. Defaults to the last `default_window_hours`.
-            Returns `Page[AlertListItem]` ordered newest first.
-            400 on an unparseable window or an inverted range.
+    # Helper to parse time filter queries
+    def parse_time_params(
+        since: Optional[datetime],
+        until: Optional[datetime],
+        window: Optional[str],
+        default_hours: int = default_window_hours,
+    ):
+        import re
+        from datetime import timedelta
 
-        GET /v1/agents/{agent_id}/summary
-            Query: since, until, window (default 24h).
-            Returns `AgentSummary`. An agent with no alerts returns a zeroed
-            summary rather than a 404.
+        now = datetime.utcnow()
+        if since and until:
+            if until < since:
+                raise HTTPException(
+                    status_code=400, detail="until must be after since"
+                )
+            return since, until
 
-        GET /v1/agents/{agent_id}/timeline
-            Query: since, until, window, limit.
-            Returns `list[TimelineItem]` merging events and alerts.
+        if window:
+            # Parse window string like "24h" or "7d"
+            m = re.match(r"^(\d+)([hd])$", window)
+            if not m:
+                raise HTTPException(
+                    status_code=400, detail="Invalid window parameter"
+                )
+            val, units = m.groups()
+            try:
+                val = int(val)
+            except Exception:
+                raise HTTPException(
+                    status_code=400, detail="Invalid window value"
+                )
+            if units == "h":
+                delta = timedelta(hours=val)
+            elif units == "d":
+                delta = timedelta(days=val)
+            else:
+                raise HTTPException(
+                    status_code=400, detail="Invalid window units"
+                )
+            end = until or now
+            start = end - delta
+            if start > end:
+                raise HTTPException(
+                    status_code=400, detail="Window results in inverted range"
+                )
+            return start, end
 
-        GET /healthz
-            Returns `HealthResponse`; 503 when the database is unreachable.
+        # Default: last 24h or as per default_hours
+        end = until or now
+        start = since or (end - timedelta(hours=default_hours))
+        if start > end:
+            raise HTTPException(
+                status_code=400, detail="Time range is inverted"
+            )
+        return start, end
 
-    `limit` is clamped to `max_page_size` rather than rejected, so a client
-    asking for too much gets data instead of an error.
-    """
-    raise NotImplementedError
+    @app.get(
+        "/v1/alerts",
+        tags=["alerts"],
+        summary="List alerts (paged, newest first)",
+        response_model=Page[AlertListItem],
+    )
+    async def list_alerts(
+        since: Optional[datetime] = Query(
+            None, description="Start of the time window (RFC3339)"
+        ),
+        until: Optional[datetime] = Query(
+            None, description="End of the time window (RFC3339)"
+        ),
+        window: Optional[str] = Query(
+            None,
+            description="Window ending at 'until' (e.g., '24h', '7d'). Takes precedence if set.",
+        ),
+        agent_id: Optional[str] = Query(
+            None, description="Filter to specific agent id"
+        ),
+        rule: Optional[str] = Query(
+            None, description="Filter by rule name"
+        ),
+        severity_min: Optional[Severity] = Query(
+            None, description="Minimum severity"
+        ),
+        limit: int = Query(
+            100, ge=1, le=max_page_size * 10, description="Max results per page"
+        ),
+        offset: int = Query(
+            0, ge=0, description="Zero-based offset for pagination"
+        ),
+    ) -> Page[AlertListItem]:
+        repo = get_repository(app)
+        start, end = parse_time_params(since, until, window)
+        # Clamp limit to max_page_size
+        real_limit = min(limit, max_page_size)
+        results, total = await repo.list_alerts(
+            since=start,
+            until=end,
+            agent_id=agent_id,
+            rule=rule,
+            severity_min=severity_min,
+            limit=real_limit,
+            offset=offset,
+        )
+        return Page[AlertListItem](
+            total=total,
+            limit=real_limit,
+            offset=offset,
+            items=results,
+        )
+
+    @app.get(
+        "/v1/agents/{agent_id}/summary",
+        tags=["agents"],
+        summary="Summary for a single agent in a window",
+        response_model=AgentSummary,
+    )
+    async def agent_summary(
+        agent_id: str,
+        since: Optional[datetime] = Query(
+            None, description="Start of time window (RFC3339)"
+        ),
+        until: Optional[datetime] = Query(
+            None, description="End of time window (RFC3339)"
+        ),
+        window: Optional[str] = Query(
+            None,
+            description="Window ending at 'until' (e.g., '24h'). Takes precedence if set.",
+        ),
+    ) -> AgentSummary:
+        repo = get_repository(app)
+        start, end = parse_time_params(since, until, window)
+        summary = await repo.agent_summary(agent_id, since=start, until=end)
+        if summary is None:
+            # Return zeroed summary if no alerts for this agent
+            return AgentSummary(agent_id=agent_id)
+        return summary
+
+    @app.get(
+        "/v1/agents/{agent_id}/timeline",
+        tags=["agents"],
+        summary="Alerts/events timeline for a single agent",
+        response_model=List[TimelineItem],
+    )
+    async def agent_timeline(
+        agent_id: str,
+        since: Optional[datetime] = Query(
+            None, description="Start of time window (RFC3339)"
+        ),
+        until: Optional[datetime] = Query(
+            None, description="End of time window (RFC3339)"
+        ),
+        window: Optional[str] = Query(
+            None,
+            description="Time window duration ending at 'until'.",
+        ),
+        limit: int = Query(
+            100, ge=1, le=max_page_size * 10, description="Max timeline items"
+        ),
+    ) -> List[TimelineItem]:
+        repo = get_repository(app)
+        start, end = parse_time_params(since, until, window)
+        real_limit = min(limit, max_page_size)
+        timeline = await repo.agent_timeline(
+            agent_id, since=start, until=end, limit=real_limit
+        )
+        return timeline
+
+    @app.get(
+        "/healthz",
+        tags=["health"],
+        summary="Readiness/liveness probe for the database",
+        response_model=HealthResponse,
+    )
+    async def healthz() -> HealthResponse:
+        repo = get_repository(app)
+        try:
+            ok = await repo.is_healthy()
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=HealthResponse(ok=False, detail="db unreachable").dict(),
+            )
+        return HealthResponse(ok=ok, detail=None if ok else "db unhealthy")
+
+    return app
 
 
 app = create_app()

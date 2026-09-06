@@ -1,7 +1,7 @@
 """Time window parsing.
 
-Both the HTTP API and the CLI accept `window=24h`, so the parsing lives here
-rather than being duplicated at each boundary.
+Every endpoint accepts `window=24h`, so the parsing lives here rather than
+being duplicated at each boundary.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def resolve_window(
     4. Nothing: `(now - default_hours, now]`.
 
     Naive datetimes are treated as UTC rather than rejected, since a teammate
-    passing `2026-08-25T10:00:00` on the CLI plainly means UTC here.
+    passing `2026-08-25T10:00:00` plainly means UTC here.
 
     Args:
         now: Injectable current time, so window logic is testable without

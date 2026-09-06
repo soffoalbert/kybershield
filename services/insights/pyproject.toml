@@ -11,8 +11,6 @@ dependencies = [
     "kybershield-pycommon",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "typer>=0.13",
-    "rich>=13.9",
 ]
 
 [project.optional-dependencies]
@@ -22,9 +20,6 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.7",
 ]
-
-[project.scripts]
-insights = "insights.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/insights"]
@@ -43,7 +38,7 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = [
-    # typer's documented idiom is a call in the argument default.
+    # FastAPI's documented idiom is a call in the argument default.
     "B008",
     # PEP 695 generics on a pydantic BaseModel are not reliably supported yet;
     # Generic[T] is the safe spelling.

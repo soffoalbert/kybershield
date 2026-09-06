@@ -11,7 +11,6 @@ flowchart LR
   Analyser[analyser: FastAPI + poller] -->|"poll by ingest_seq cursor"| PG
   Analyser -->|"INSERT alerts ON CONFLICT DO NOTHING"| PG
   Insights[insights: FastAPI read-only] -->|SELECT| PG
-  CLI[typer CLI] --> Insights
   Ops[Operator] -->|"POST /v1/analyze/run"| Analyser
 ```
 
