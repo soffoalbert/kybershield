@@ -9,7 +9,22 @@
 
 import type { Pool } from 'pg';
 import type { EventRepository } from '../domain/ports.js';
-import type { AgentEvent, IngestResult } from '../domain/types.js';
+import { StorageError, type AgentEvent, type IngestResult } from '../domain/types.js';
+import { withTransaction } from './pool.js';
+
+/** Bind parameters for {@link INSERT_EVENT_SQL}, in declaration order. */
+function toEventParams(event: AgentEvent): unknown[] {
+  return [
+    event.eventId,
+    event.agentId,
+    event.occurredAt,
+    event.type,
+    event.payload,
+    event.raw,
+    event.tags,
+    event.clientId,
+  ];
+}
 
 /**
  * Insert an event, doing nothing if `event_id` already exists.
@@ -58,15 +73,17 @@ export class PgEventRepository implements EventRepository {
    *   attached as `cause` for logging.
    */
   async insertIfAbsent(event: AgentEvent): Promise<IngestResult> {
-    const client = await this.pool.connect();
     try {
-      const result = await client.query(INSERT_EVENT_SQL, [event.eventId, event.agentId, event.occurredAt, event.type, event.payload, event.raw, event.tags, event.clientId]);
-      // RETURNING yields no rows when ON CONFLICT DO NOTHING skipped the insert.
-      return { eventId: event.eventId, status: result.rowCount === 1 ? 'created' : 'duplicate' };
+      return await withTransaction(this.pool, async (client) => {
+        // Must precede the event: `events.agent_id` is a foreign key into
+        // `agents`, so a first-time agent would otherwise fail the insert.
+        await client.query(UPSERT_AGENT_SQL, [event.agentId, event.occurredAt]);
+        const result = await client.query(INSERT_EVENT_SQL, toEventParams(event));
+        // RETURNING yields no rows when ON CONFLICT DO NOTHING skipped the insert.
+        return { eventId: event.eventId, status: result.rowCount === 1 ? 'created' : 'duplicate' };
+      });
     } catch (error) {
-      throw new Error(`Failed to insert event: ${error}`);
-    } finally {
-      client.release();
+      throw new StorageError('Failed to insert event', error);
     }
   }
 
@@ -95,17 +112,19 @@ export class PgEventRepository implements EventRepository {
       }
     }
 
-    const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
-      const created = new Set<string>();
-      for (const event of firstOccurrence.values()) {
-        const result = await client.query(INSERT_EVENT_SQL, [event.eventId, event.agentId, event.occurredAt, event.type, event.payload, event.raw, event.tags, event.clientId]);
-        if (result.rowCount === 1) {
-          created.add(event.eventId);
+      const created = await withTransaction(this.pool, async (client) => {
+        const inserted = new Set<string>();
+        for (const event of firstOccurrence.values()) {
+          // Same foreign key ordering as the single-event path.
+          await client.query(UPSERT_AGENT_SQL, [event.agentId, event.occurredAt]);
+          const result = await client.query(INSERT_EVENT_SQL, toEventParams(event));
+          if (result.rowCount === 1) {
+            inserted.add(event.eventId);
+          }
         }
-      }
-      await client.query('COMMIT');
+        return inserted;
+      });
 
       // One result per input event, in input order. A repeat inside the batch
       // reports `duplicate` even though its first occurrence was created.
@@ -119,10 +138,7 @@ export class PgEventRepository implements EventRepository {
         };
       });
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
-      throw new Error(`Failed to insert events: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      client.release();
+      throw new StorageError('Failed to insert events', error);
     }
   }
 
@@ -136,7 +152,7 @@ export class PgEventRepository implements EventRepository {
     try {
       await client.query(UPSERT_AGENT_SQL, [agentId, seenAt]);
     } catch (error) {
-      throw new Error(`Failed to upsert agent seen: ${error}`);
+      throw new StorageError('Failed to upsert agent seen', error);
     } finally {
       client.release();
     }

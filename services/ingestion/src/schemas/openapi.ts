@@ -69,9 +69,11 @@ export const COMPONENT_SCHEMAS = {
   ValidationError: {
     $id: 'ValidationError',
     type: 'object',
-    required: ['error', 'issues'],
+    // Two shapes share this status. `invalid_json` is raised by the body
+    // parser before validation runs and so carries no field issues.
+    required: ['error'],
     properties: {
-      error: { type: 'string', enum: ['validation_failed'] },
+      error: { type: 'string', enum: ['validation_failed', 'invalid_json'] },
       issues: {
         type: 'array',
         items: {
@@ -146,7 +148,15 @@ export const POST_EVENTS_BATCH_SCHEMA = {
         type: 'array',
         minItems: 1,
         maxItems: 100,
-        items: { $ref: 'EventEnvelope#' },
+        // Deliberately permissive. A `$ref` to EventEnvelope here would make
+        // Fastify reject the whole batch over one bad entry, which is the
+        // opposite of the documented per-item behaviour: entries are validated
+        // in the handler and reported by index under `rejected`.
+        items: {
+          type: 'object',
+          description: 'An EventEnvelope. Validated per item; see `rejected`.',
+          additionalProperties: true,
+        },
       },
     },
   },

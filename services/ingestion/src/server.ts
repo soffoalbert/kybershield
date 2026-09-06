@@ -12,7 +12,7 @@ import { createPool } from './db/pool.js';
 const config = loadConfig();
 const pool = createPool(config);
 
-const app = buildApp({
+const app = await buildApp({
   config,
   repository: new PgEventRepository(pool),
   apiKeyStore: new EnvApiKeyStore(config.apiKeys),

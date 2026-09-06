@@ -110,7 +110,41 @@ export function parseEnvelope(
   body: unknown,
   clientId: string,
 ): Result<AgentEvent, ValidationError> {
-  throw new Error('TODO: implement parseEnvelope');
+  const envelope = EventEnvelopeSchema.safeParse(body);
+  if (!envelope.success) {
+    return { ok: false, error: toValidationError(envelope.error) };
+  }
+
+  const { event_id, agent_id, timestamp, type, payload, tags } = envelope.data;
+
+  let normalised = payload;
+  const payloadSchema = PAYLOAD_SCHEMAS[type];
+  if (payloadSchema) {
+    const parsed = payloadSchema.safeParse(payload);
+    if (!parsed.success) {
+      // Re-rooted under `payload` so the reported path matches the submitted
+      // body rather than the sub-schema's own coordinates.
+      return { ok: false, error: toValidationError(parsed.error, ['payload']) };
+    }
+    normalised = parsed.data as Record<string, unknown>;
+  }
+
+  return {
+    ok: true,
+    value: {
+      // The wire format is snake_case; the domain entity is camelCase. This
+      // mapping is the only place the two meet.
+      eventId: event_id,
+      agentId: agent_id,
+      occurredAt: new Date(timestamp),
+      type,
+      payload: normalised,
+      raw: body as Record<string, unknown>,
+      tags: tags ?? [],
+      // From the auth layer, never the body, so a client cannot forge it.
+      clientId,
+    },
+  };
 }
 
 /**
@@ -119,7 +153,18 @@ export function parseEnvelope(
  * Deliberately reports paths and messages only. Submitted values are never
  * included, because event payloads routinely carry secrets and this output
  * lands in both the response and the logs.
+ *
+ * @param pathPrefix Prepended to every issue path, so an error from a nested
+ *   schema can be reported relative to the whole body.
  */
-export function toValidationError(error: z.ZodError): ValidationError {
-  throw new Error('TODO: implement toValidationError');
+export function toValidationError(
+  error: z.ZodError,
+  pathPrefix: readonly (string | number)[] = [],
+): ValidationError {
+  return {
+    issues: error.issues.map((issue) => ({
+      path: [...pathPrefix, ...issue.path].join('.'),
+      message: issue.message,
+    })),
+  };
 }
