@@ -93,15 +93,20 @@ class PgAnalysisRepository:
     """PostgreSQL implementation of :class:`AnalysisRepository`."""
 
     def __init__(self, db: Database) -> None:
-        raise NotImplementedError
-
+        self.db = db
     def fetch_batch_after(self, cursor: int, limit: int) -> list[Event]:
         """Run :data:`FETCH_BATCH_SQL` and map rows to Events."""
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(FETCH_BATCH_SQL, {"cursor": cursor, "limit": limit})
+                return [Event(**row) for row in cursor.fetchall()]
 
     def fetch_batch_since(self, since: datetime | None, limit: int, offset: int) -> list[Event]:
         """Page through history by `occurred_at` for a backfill."""
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(FETCH_BATCH_SINCE_SQL, {"since": since, "limit": limit, "offset": offset})
+                return [Event(**row) for row in cursor.fetchall()]
 
     def insert_alerts_ignore_dupes(self, drafts: Sequence[AlertDraft]) -> int:
         """Insert all drafts in one transaction, counting returned ids.
@@ -109,15 +114,24 @@ class PgAnalysisRepository:
         `details` is serialised to JSON; `severity` is passed as its string
         value so Postgres casts it to the enum.
         """
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(INSERT_ALERTS_SQL, {"drafts": drafts})
+                return cursor.rowcount
 
     def get_cursor(self) -> int:
         """Read `analysis_cursor.last_ingest_seq`."""
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT last_ingest_seq FROM analysis_cursor")
+                return cursor.fetchone()[0]
 
     def set_cursor(self, seq: int) -> None:
         """Write `analysis_cursor.last_ingest_seq` and bump `updated_at`."""
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE analysis_cursor SET last_ingest_seq = %s, updated_at = NOW()", (seq,))
+                conn.commit()
 
     def process_batch_atomically(
         self, events: Sequence[Event], drafts: Sequence[AlertDraft], new_cursor: int
@@ -131,4 +145,8 @@ class PgAnalysisRepository:
 
         @returns The number of alerts written.
         """
-        raise NotImplementedError
+        with self.db.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT INTO alerts (event_id, agent_id, rule, severity, summary, details) VALUES (%s, %s, %s, %s, %s, %s)", (events, drafts, new_cursor))
+                conn.commit()
+                return cursor.rowcount

@@ -7,9 +7,19 @@ third: `python -m analyser run-once` is equally usable by hand or from cron.
 
 from __future__ import annotations
 
+import dataclasses
+import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 import typer
+from pycommon import Database
+
+from analyser.config import get_config, rule_config
+from analyser.engine import AnalysisEngine, RunReport
+from analyser.repository import PgAnalysisRepository
+from analyser.rules import default_rules
 
 app = typer.Typer(
     name="analyser",
@@ -18,9 +28,44 @@ app = typer.Typer(
 )
 
 
+@contextmanager
+def _engine() -> Iterator[AnalysisEngine]:
+    """Build an engine over a short-lived pool, closed on exit.
+
+    Every command needs the same four objects; a CLI invocation is a single
+    pass, so the pool is opened and drained around it rather than kept warm.
+    """
+    config = get_config()
+    db = Database(
+        config.database_url,
+        min_size=1,
+        max_size=config.db_pool_max_size,
+        application_name="kybershield-analyser-cli",
+    )
+    db.open()
+    try:
+        yield AnalysisEngine(
+            default_rules(),
+            PgAnalysisRepository(db),
+            config,
+            batch_size=config.batch_size,
+        )
+    finally:
+        db.close()
+
+
+def _print_report(report: RunReport) -> None:
+    """Print a run report as one JSON object.
+
+    JSON rather than the dataclass repr so `run-once` output pipes into `jq`
+    from a cron wrapper.
+    """
+    print(json.dumps(dataclasses.asdict(report), indent=2, default=str))
+
+
 @app.command("run-once")
 def run_once(
-    batch_size: int = typer.Option(None, help="Events per batch; defaults to BATCH_SIZE."),
+    batch_size: int | None = typer.Option(None, help="Events per batch; defaults to BATCH_SIZE."),
     drain: bool = typer.Option(False, help="Keep going until the backlog is empty."),
 ) -> None:
     """Analyse pending events and exit.
@@ -28,16 +73,18 @@ def run_once(
     Prints a summary of the run. Exits non-zero if any rule raised, so a cron
     wrapper can alert on a broken detection instead of failing silently.
     """
-    config = get_config()
-    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
-    report = engine.run_once(batch_size)
-    print(report)
+    with _engine() as engine:
+        report = engine.run_until_caught_up() if drain else engine.run_once(batch_size)
+    _print_report(report)
     if report.rule_failures:
         raise typer.Exit(1)
 
+
 @app.command("backfill")
 def backfill(
-    since: datetime = typer.Option(None, help="Only re-analyse events at or after this time."),
+    since: datetime | None = typer.Option(
+        None, help="Only re-analyse events at or after this time."
+    ),
 ) -> None:
     """Re-run every rule over historical events.
 
@@ -45,26 +92,32 @@ def backfill(
     existing findings are skipped, so this is safe to run repeatedly. Use it
     after adding or retuning a rule.
     """
-    config = get_config()
-    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
-    report = engine.backfill(since)
-    print(report)
+    with _engine() as engine:
+        report = engine.backfill(since)
+    _print_report(report)
 
 
 @app.command("list-rules")
 def list_rules() -> None:
     """Print the registered rules with their effective configuration."""
     config = get_config()
-    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
-    print(engine.rules)
+    with _engine() as engine:
+        rules = [
+            {
+                "id": rule.id,
+                "description": rule.description,
+                "config": rule_config(rule.id, config),
+            }
+            for rule in engine.rules
+        ]
+    print(json.dumps(rules, indent=2))
 
 
 @app.command("show-cursor")
 def show_cursor() -> None:
-    """Print the current watermark and how many events sit beyond it."""
-    config = get_config()
-    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
-    print(engine.repo.get_cursor())
+    """Print the analysis watermark, the highest `ingest_seq` already handled."""
+    with _engine() as engine:
+        print(engine.repo.get_cursor())
 
 
 if __name__ == "__main__":

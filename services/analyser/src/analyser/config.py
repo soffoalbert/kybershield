@@ -8,6 +8,7 @@ code change. The engine passes it to every rule's `evaluate`.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 from pycommon import BaseServiceSettings
 from pydantic import field_validator
@@ -63,6 +64,25 @@ class AnalyserConfig(BaseServiceSettings):
         if isinstance(value, str):
             return value.split(",")
         return value
+
+
+#: Which settings each rule actually reads. Used by `GET /v1/rules` and the
+#: `list-rules` command to show live thresholds. A rule absent from this map,
+#: or mapped to an empty list, has nothing to tune.
+RULE_CONFIG_FIELDS: dict[str, list[str]] = {
+    "domain_allowlist": ["allowed_domains"],
+    "secret_file_access": ["secret_path_patterns"],
+    "download_and_execute": [],
+}
+
+
+def rule_config(rule_id: str, config: AnalyserConfig) -> dict[str, Any]:
+    """Return the settings that affect `rule_id`.
+
+    Whitelisted per rule rather than dumping the whole settings object, which
+    would put `database_url` in an unauthenticated response.
+    """
+    return {field: getattr(config, field) for field in RULE_CONFIG_FIELDS.get(rule_id, [])}
 
 
 @lru_cache(maxsize=1)
