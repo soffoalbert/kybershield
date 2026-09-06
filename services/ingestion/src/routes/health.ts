@@ -1,0 +1,25 @@
+/**
+ * Liveness and readiness endpoints. Unauthenticated by design so an
+ * orchestrator can probe them without holding a credential.
+ */
+
+import type { FastifyPluginAsync } from 'fastify';
+import type { EventRepository } from '../domain/ports.js';
+
+export interface HealthRoutesOptions {
+  repository: EventRepository;
+}
+
+/**
+ * Register `GET /healthz` and `GET /readyz`.
+ *
+ * `/healthz` answers `200 {status:"ok"}` as long as the process is running. It
+ * must not touch the database: a liveness probe that fails on a transient
+ * database outage would restart a perfectly healthy process.
+ *
+ * `/readyz` probes the database and answers `200 {status:"ready"}` or
+ * `503 {status:"degraded", database:false}`.
+ */
+export const healthRoutes: FastifyPluginAsync<HealthRoutesOptions> = async (app, opts) => {
+  throw new Error('TODO: implement healthRoutes');
+};

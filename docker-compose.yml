@@ -1,0 +1,74 @@
+name: kybershield
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kybershield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kybershield}
+      POSTGRES_DB: ${POSTGRES_DB:-kybershield}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kybershield} -d ${POSTGRES_DB:-kybershield}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
+      API_KEYS: ${API_KEYS:-demo-agent:dev-secret-key}
+      PORT: 3000
+      HOST: 0.0.0.0
+      BODY_LIMIT_BYTES: ${BODY_LIMIT_BYTES:-524288}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-10000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${INGESTION_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  analyser:
+    build:
+      context: .
+      dockerfile: services/analyser/Dockerfile
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
+      PORT: 8001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-5}
+      BATCH_SIZE: ${BATCH_SIZE:-200}
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-api.openai.com,github.com,pypi.org,registry.npmjs.org}
+      RAPID_READ_THRESHOLD: ${RAPID_READ_THRESHOLD:-3}
+      RAPID_READ_WINDOW_SECONDS: ${RAPID_READ_WINDOW_SECONDS:-60}
+    ports:
+      - "${ANALYSER_PORT:-8001}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  insights:
+    build:
+      context: .
+      dockerfile: services/insights/Dockerfile
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kybershield}:${POSTGRES_PASSWORD:-kybershield}@postgres:5432/${POSTGRES_DB:-kybershield}
+      PORT: 8002
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEFAULT_WINDOW_HOURS: ${DEFAULT_WINDOW_HOURS:-24}
+    ports:
+      - "${INSIGHTS_PORT:-8002}:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
