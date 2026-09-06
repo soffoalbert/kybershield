@@ -22,9 +22,7 @@ def get_summary(client: TestClient, agent_id: str = "agent-alpha", **params: Any
 
 
 class TestTotals:
-    def test_counts_alerts_in_the_window(
-        self, client: TestClient, seeded: dict[str, Any]
-    ) -> None:
+    def test_counts_alerts_in_the_window(self, client: TestClient, seeded: dict[str, Any]) -> None:
         assert get_summary(client, seeded["alpha"])["total_alerts"] == 3
 
     def test_excludes_alerts_outside_the_window(
@@ -46,9 +44,7 @@ class TestTotals:
         """Alerts without a denominator are hard to read: ten alerts out of
         twelve events is a very different picture from ten out of ten
         thousand."""
-        events = [
-            seed_event(db, occurred_at=now - timedelta(minutes=index)) for index in range(4)
-        ]
+        events = [seed_event(db, occurred_at=now - timedelta(minutes=index)) for index in range(4)]
         seed_alert(db, event_id=events[0], created_at=now - timedelta(minutes=1))
 
         body = get_summary(client)
@@ -147,9 +143,7 @@ class TestSeverityCounts:
     def test_is_empty_when_the_agent_has_no_alerts(self, client: TestClient) -> None:
         assert get_summary(client)["severity_counts"] == {}
 
-    def test_counts_sum_to_total_alerts(
-        self, client: TestClient, seeded: dict[str, Any]
-    ) -> None:
+    def test_counts_sum_to_total_alerts(self, client: TestClient, seeded: dict[str, Any]) -> None:
         """An internal consistency check that catches a mis-scoped window in
         one of the two queries the summary runs."""
         body = get_summary(client, seeded["alpha"])
@@ -167,18 +161,14 @@ class TestWindowHandling:
         assert body["total_alerts"] == 3
         assert abs((now - timedelta(hours=24)) - window_start) < timedelta(minutes=1)
 
-    def test_accepts_a_window_shorthand(
-        self, client: TestClient, seeded: dict[str, Any]
-    ) -> None:
+    def test_accepts_a_window_shorthand(self, client: TestClient, seeded: dict[str, Any]) -> None:
         """window=7d widens the range."""
         body = get_summary(client, seeded["alpha"], window="7d")
 
         assert body["total_alerts"] == 4
         assert body["max_severity"] == "critical"
 
-    def test_echoes_the_resolved_bounds(
-        self, client: TestClient, now: datetime
-    ) -> None:
+    def test_echoes_the_resolved_bounds(self, client: TestClient, now: datetime) -> None:
         """window_start and window_end are returned, so a caller can tell
         exactly what was measured rather than inferring it."""
         since = now - timedelta(hours=6)

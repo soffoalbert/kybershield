@@ -59,6 +59,12 @@ class TestParseWindow:
         with pytest.raises(ValueError):
             parse_window("")
 
+    def test_rejects_a_non_string(self) -> None:
+        """A query parser handing over an int must fail loudly rather than
+        crash inside the regex."""
+        with pytest.raises(ValueError):
+            parse_window(24)  # type: ignore[arg-type]
+
 
 class TestResolveWindow:
     def test_uses_explicit_since_and_until_verbatim(self) -> None:
@@ -88,6 +94,12 @@ class TestResolveWindow:
         start, _ = resolve_window(None, None, None, 6, now=NOW)
 
         assert start == NOW - timedelta(hours=6)
+
+    def test_rejects_a_non_positive_default(self) -> None:
+        """A misconfigured DEFAULT_WINDOW_HOURS would otherwise resolve to an
+        empty or inverted range and quietly return nothing."""
+        with pytest.raises(ValueError):
+            resolve_window(None, None, None, 0, now=NOW)
 
     def test_treats_a_naive_datetime_as_utc(self) -> None:
         """A teammate passing 2026-08-25T10:00:00 plainly means UTC;

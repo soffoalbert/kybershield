@@ -12,3 +12,4 @@ venv/
 .mypy_cache/
 *.egg-info/
 .DS_Store
+.coverage*

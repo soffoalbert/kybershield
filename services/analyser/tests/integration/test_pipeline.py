@@ -104,9 +104,7 @@ class TestRunOnce:
         assert report.events_examined == 1
         assert {alert.event_id for alert in read_alerts(db)} == {"recent", "late"}
 
-    def test_processes_events_in_ingest_seq_order(
-        self, db: Database, make_engine
-    ) -> None:
+    def test_processes_events_in_ingest_seq_order(self, db: Database, make_engine) -> None:
         recorder = StubRule("recorder", fires=False)
         seed_event(db, event_id="evt-1")
         seed_event(db, event_id="evt-2")
@@ -152,9 +150,7 @@ class TestRunOnce:
 
 
 class TestConcurrency:
-    def test_two_concurrent_runs_do_not_duplicate_alerts(
-        self, db: Database, make_engine
-    ) -> None:
+    def test_two_concurrent_runs_do_not_duplicate_alerts(self, db: Database, make_engine) -> None:
         """Both passes may claim the batch; the constraint keeps one alert."""
         seed_secret_read(db)
         engines = [make_engine(), make_engine()]
@@ -205,9 +201,7 @@ class TestBackfill:
 
         assert [alert.event_id for alert in read_alerts(db)] == ["recent"]
 
-    def test_writes_only_findings_from_a_newly_added_rule(
-        self, db: Database, make_engine
-    ) -> None:
+    def test_writes_only_findings_from_a_newly_added_rule(self, db: Database, make_engine) -> None:
         seed_secret_read(db)
         make_engine(StubRule("old")).backfill()
 
@@ -216,9 +210,7 @@ class TestBackfill:
         assert report.alerts_written == 1
         assert [alert.rule for alert in read_alerts(db)] == ["new", "old"]
 
-    def test_pages_through_history_beyond_one_batch(
-        self, db: Database, make_engine
-    ) -> None:
+    def test_pages_through_history_beyond_one_batch(self, db: Database, make_engine) -> None:
         for seq in range(1, 6):
             seed_secret_read(db, event_id=f"evt-{seq}")
 
@@ -249,6 +241,24 @@ class TestForeignKeys:
             cur.execute("DELETE FROM events WHERE event_id = 'evt-1'")
 
         assert read_alerts(db) == []
+
+
+class TestRepositoryDirectly:
+    """The two protocol methods the engine's own paths never reach."""
+
+    def test_inserting_no_drafts_writes_nothing(self, repo) -> None:
+        assert repo.insert_alerts_ignore_dupes([]) == 0
+
+    def test_set_cursor_moves_the_watermark(self, db: Database, repo) -> None:
+        """On the protocol so an implementation can advance the cursor outside
+        a batch; the engine only ever does it atomically."""
+        repo.set_cursor(11)
+
+        assert read_cursor(db) == 11
+        assert repo.get_cursor() == 11
+
+    def test_get_cursor_starts_at_zero(self, repo) -> None:
+        assert repo.get_cursor() == 0
 
 
 class OrphanDraftRule:

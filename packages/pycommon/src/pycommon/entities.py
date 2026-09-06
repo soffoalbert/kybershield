@@ -33,12 +33,14 @@ class Severity(StrEnum):
         Enables sorting and `severity_min` filtering in Python without
         round-tripping to the database.
         """
-        raise NotImplementedError
+        # Declaration order is the ordering, so it is the single place a new
+        # level has to be inserted correctly.
+        return list(type(self)).index(self)
 
     @classmethod
     def max_of(cls, severities: list[Severity]) -> Severity | None:
         """Return the highest severity in `severities`, or None if empty."""
-        raise NotImplementedError
+        return max(severities, key=lambda severity: severity.rank, default=None)
 
 
 class EventType(StrEnum):

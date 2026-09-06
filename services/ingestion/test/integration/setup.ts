@@ -9,6 +9,7 @@
  * Start one with `docker compose up -d postgres`.
  */
 
+import { readFile, readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, systemClock } from '../../src/app.js';
@@ -17,10 +18,23 @@ import type { AppConfig } from '../../src/config/env.js';
 import { PgEventRepository } from '../../src/db/eventRepository.js';
 import type { Clock, EventRepository } from '../../src/domain/ports.js';
 
-/** Connection string, from TEST_DATABASE_URL or the compose default. */
+/**
+ * Connection string for the test database.
+ *
+ * A database of its own, not the compose `kybershield` one: `truncateAll`
+ * would otherwise wipe whatever the developer was looking at, and the running
+ * analyser would be polling the same tables a test is asserting on.
+ */
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
-  'postgres://kybershield:kybershield@localhost:5432/kybershield';
+  'postgres://kybershield:kybershield@localhost:5432/kybershield_test';
+
+/** Server-level connection used to create the test database if it is absent. */
+const MAINTENANCE_DATABASE_URL =
+  process.env.MAINTENANCE_DATABASE_URL ??
+  'postgres://kybershield:kybershield@localhost:5432/postgres';
+
+const MIGRATIONS_DIR = new URL('../../../../db/migrations/', import.meta.url);
 
 /** The one key {@link buildIntegrationApp} accepts, and the client it maps to. */
 export const TEST_API_KEY = 'test-api-key-123';
@@ -38,6 +52,8 @@ const MANAGED_TABLES = ['alerts', 'events', 'agents'] as const;
  * a skipped suite.
  */
 export async function createTestPool(): Promise<Pool> {
+  await createDatabaseIfAbsent();
+
   const pool = new Pool({ connectionString: TEST_DATABASE_URL, max: 5 });
   // `pg` re-emits idle client errors on the pool, and an unhandled 'error'
   // event would take the test process down.
@@ -47,6 +63,7 @@ export async function createTestPool(): Promise<Pool> {
     const client = await pool.connect();
     try {
       await client.query('SELECT 1');
+      await applyMigrationsIfAbsent(client);
     } finally {
       client.release();
     }
@@ -60,6 +77,51 @@ export async function createTestPool(): Promise<Pool> {
   }
 
   return pool;
+}
+
+/**
+ * Create the test database unless it already exists.
+ *
+ * So a fresh checkout needs only `docker compose up -d postgres` before
+ * `npm test`. CREATE DATABASE cannot run inside a transaction or take a bind
+ * parameter, hence the interpolated literal name.
+ */
+async function createDatabaseIfAbsent(): Promise<void> {
+  const name = new URL(TEST_DATABASE_URL).pathname.replace(/^\//, '');
+  const maintenance = new Pool({ connectionString: MAINTENANCE_DATABASE_URL, max: 1 });
+  maintenance.on('error', () => {});
+  try {
+    const existing = await maintenance.query('SELECT 1 FROM pg_database WHERE datname = $1', [
+      name,
+    ]);
+    if (existing.rowCount === 0) {
+      await maintenance.query(`CREATE DATABASE "${name.replaceAll('"', '""')}"`);
+    }
+  } catch {
+    // Left to the caller's own connection attempt, which reports the
+    // actionable "start Postgres" message.
+  } finally {
+    await maintenance.end().catch(() => {});
+  }
+}
+
+/**
+ * Apply the migrations once, if the schema is not there yet.
+ *
+ * Presence of `events` stands in for a version table: the migrations are
+ * additive and this database exists only for the suite.
+ */
+async function applyMigrationsIfAbsent(client: {
+  query: (text: string) => Promise<{ rows: unknown[] }>;
+}): Promise<void> {
+  const probe = await client.query("SELECT to_regclass('public.events') AS present");
+  if ((probe.rows[0] as { present: string | null }).present) {
+    return;
+  }
+  const files = (await readdir(MIGRATIONS_DIR)).filter((name) => name.endsWith('.sql')).sort();
+  for (const file of files) {
+    await client.query(await readFile(new URL(file, MIGRATIONS_DIR), 'utf8'));
+  }
 }
 
 /**

@@ -44,9 +44,7 @@ class TestDownloadAndExecuteRule:
             ('sh -c "$(curl https://x)"', "process_substitution"),
         ],
     )
-    def test_fires_on_a_download_and_execute_command(
-        self, command: str, pattern: str
-    ) -> None:
+    def test_fires_on_a_download_and_execute_command(self, command: str, pattern: str) -> None:
         alerts = alerts_for_command(command)
 
         assert len(alerts) == 1

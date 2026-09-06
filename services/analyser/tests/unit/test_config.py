@@ -73,9 +73,7 @@ class TestRuleConfig:
     def test_reports_the_settings_a_rule_reads(self) -> None:
         config = make_config(allowed_domains=["github.com"])
 
-        assert rule_config("domain_allowlist", config) == {
-            "allowed_domains": ["github.com"]
-        }
+        assert rule_config("domain_allowlist", config) == {"allowed_domains": ["github.com"]}
 
     def test_returns_empty_for_a_rule_with_nothing_to_tune(self) -> None:
         assert rule_config("download_and_execute", make_config()) == {}

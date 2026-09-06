@@ -169,3 +169,24 @@ def client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterat
         yield test_client
 
     get_config.cache_clear()
+
+
+@pytest.fixture
+def polling_client(db: Database, db_url: str, monkeypatch: pytest.MonkeyPatch):
+    """A client for the app as production runs it: poller and listener on.
+
+    The interval is long, so any pass a test observes came from the wiring
+    under test rather than from the fallback timer.
+    """
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("POLLER_ENABLED", "true")
+    monkeypatch.setenv("LISTEN_ENABLED", "true")
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "30")
+    get_config.cache_clear()
+
+    from analyser.api import create_app
+
+    with TestClient(create_app()) as test_client:
+        yield test_client
+
+    get_config.cache_clear()

@@ -93,6 +93,11 @@ class TestExtractHost:
     def test_returns_none_for_garbage(self) -> None:
         assert extract_host("not a url") is None
 
+    def test_returns_none_when_urlparse_itself_raises(self) -> None:
+        """An unterminated IPv6 literal makes `urlparse` raise rather than
+        return, and a malformed payload must not stall the batch."""
+        assert extract_host("http://[::1/path") is None
+
     def test_ignores_userinfo(self) -> None:
         """`user:pass@` is part of netloc but must not become the host."""
         assert extract_host("http://user:pass@evil.com/") == "evil.com"

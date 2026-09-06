@@ -56,9 +56,7 @@ class TestDefaultWindow:
 
         assert ids_of(get_alerts(client)) == [alert_id]
 
-    def test_orders_newest_first(
-        self, client: TestClient, db: Database, now: datetime
-    ) -> None:
+    def test_orders_newest_first(self, client: TestClient, db: Database, now: datetime) -> None:
         oldest = seed_alert(db, created_at=now - timedelta(hours=3))
         newest = seed_alert(db, created_at=now - timedelta(minutes=5))
         middle = seed_alert(db, created_at=now - timedelta(hours=1))
@@ -77,9 +75,7 @@ class TestDefaultWindow:
 
 
 class TestFilters:
-    def test_filters_by_agent_id(
-        self, client: TestClient, seeded: dict[str, Any]
-    ) -> None:
+    def test_filters_by_agent_id(self, client: TestClient, seeded: dict[str, Any]) -> None:
         body = get_alerts(client, agent_id=seeded["beta"])
 
         assert ids_of(body) == seeded["beta_recent"]
@@ -91,9 +87,7 @@ class TestFilters:
         assert {item["rule"] for item in body["items"]} == {"secret_file_access"}
         assert body["total"] == 2
 
-    def test_filters_by_minimum_severity(
-        self, client: TestClient, seeded: dict[str, Any]
-    ) -> None:
+    def test_filters_by_minimum_severity(self, client: TestClient, seeded: dict[str, Any]) -> None:
         """severity_min=high returns high and critical only, relying on the
         Postgres enum's ordering."""
         body = get_alerts(client, severity_min="high")
@@ -155,10 +149,7 @@ class TestPagination:
     @pytest.fixture
     def seven_alerts(self, db: Database, now: datetime) -> list[str]:
         """Seven alerts a minute apart, newest first."""
-        return [
-            seed_alert(db, created_at=now - timedelta(minutes=index))
-            for index in range(7)
-        ]
+        return [seed_alert(db, created_at=now - timedelta(minutes=index)) for index in range(7)]
 
     def test_respects_limit(self, client: TestClient, seven_alerts: list[str]) -> None:
         body = get_alerts(client, limit=3)

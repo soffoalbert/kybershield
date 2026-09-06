@@ -26,9 +26,7 @@ from insights.config import get_config
 #: Deliberately not the database docker-compose points the services at: the
 #: analyser container writes to that one continuously, and rows appearing under
 #: a test's feet are unassertable.
-DEFAULT_TEST_DATABASE_URL = (
-    "postgresql://kybershield:kybershield@localhost:5432/kybershield_test"
-)
+DEFAULT_TEST_DATABASE_URL = "postgresql://kybershield:kybershield@localhost:5432/kybershield_test"
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 

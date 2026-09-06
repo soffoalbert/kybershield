@@ -73,9 +73,7 @@ class TestMerging:
 
         assert [entry["kind"] for entry in entries] == ["event"]
 
-    def test_orders_newest_first(
-        self, client: TestClient, db: Database, now: datetime
-    ) -> None:
+    def test_orders_newest_first(self, client: TestClient, db: Database, now: datetime) -> None:
         oldest = seed_event(db, occurred_at=now - timedelta(hours=3))
         newest = seed_event(db, occurred_at=now - timedelta(minutes=5))
         middle = seed_event(db, occurred_at=now - timedelta(hours=1))
@@ -182,9 +180,7 @@ class TestSeverityAndRule:
         assert alert["severity"] == "high"
         assert alert["rule"] == "secret_file_access"
 
-    def test_events_carry_neither(
-        self, client: TestClient, db: Database, now: datetime
-    ) -> None:
+    def test_events_carry_neither(self, client: TestClient, db: Database, now: datetime) -> None:
         seed_event(db, occurred_at=now - timedelta(minutes=1))
 
         entry = get_timeline(client)[0]
@@ -194,9 +190,7 @@ class TestSeverityAndRule:
 
 
 class TestScoping:
-    def test_excludes_other_agents(
-        self, client: TestClient, db: Database, now: datetime
-    ) -> None:
+    def test_excludes_other_agents(self, client: TestClient, db: Database, now: datetime) -> None:
         mine = seed_event(db, agent_id="agent-alpha", occurred_at=now - timedelta(minutes=1))
         seed_event(db, agent_id="agent-beta", occurred_at=now - timedelta(minutes=1))
 
@@ -213,9 +207,7 @@ class TestScoping:
 
         assert [entry["reference_id"] for entry in entries] == [recent]
 
-    def test_respects_the_limit(
-        self, client: TestClient, db: Database, now: datetime
-    ) -> None:
+    def test_respects_the_limit(self, client: TestClient, db: Database, now: datetime) -> None:
         for index in range(5):
             seed_event(db, occurred_at=now - timedelta(minutes=index))
 
@@ -231,8 +223,7 @@ class TestScoping:
         pushed off the end, which is exactly the information the endpoint
         exists to show."""
         older_events = [
-            seed_event(db, occurred_at=now - timedelta(minutes=10 + index))
-            for index in range(4)
+            seed_event(db, occurred_at=now - timedelta(minutes=10 + index)) for index in range(4)
         ]
         newest_event = seed_event(db, occurred_at=now - timedelta(minutes=1))
         newest_alert = seed_alert(db, event_id=newest_event, created_at=now)
@@ -267,8 +258,6 @@ class TestResponseEnvelope:
         assert body["offset"] == 0
 
     def test_rejects_an_unparseable_window(self, client: TestClient) -> None:
-        response = client.get(
-            "/v1/agents/agent-alpha/timeline", params={"window": "7w"}
-        )
+        response = client.get("/v1/agents/agent-alpha/timeline", params={"window": "7w"})
 
         assert response.status_code == 400

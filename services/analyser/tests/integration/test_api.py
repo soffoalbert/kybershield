@@ -6,6 +6,8 @@ one and assertions are not racing a background loop.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 from pycommon import Database
@@ -34,9 +36,7 @@ class TestAnalyzeRun:
         assert body["cursor_before"] == body["cursor_after"] == 0
         assert body["rule_failures"] == []
 
-    def test_writes_alerts_for_pending_events(
-        self, db: Database, client: TestClient
-    ) -> None:
+    def test_writes_alerts_for_pending_events(self, db: Database, client: TestClient) -> None:
         seed_secret_read(db, event_id="evt-1")
 
         body = client.post("/v1/analyze/run").json()
@@ -46,9 +46,7 @@ class TestAnalyzeRun:
         assert body["cursor_after"] > body["cursor_before"]
         assert [alert.rule for alert in read_alerts(db)] == ["secret_file_access"]
 
-    def test_reports_zero_written_on_a_second_call(
-        self, db: Database, client: TestClient
-    ) -> None:
+    def test_reports_zero_written_on_a_second_call(self, db: Database, client: TestClient) -> None:
         seed_secret_read(db)
         client.post("/v1/analyze/run")
 
@@ -95,9 +93,7 @@ class TestAnalyzeBackfill:
     def test_accepts_a_since_timestamp(self, db: Database, client: TestClient) -> None:
         seed_secret_read(db)
 
-        response = client.post(
-            "/v1/analyze/backfill", json={"since": "2999-01-01T00:00:00Z"}
-        )
+        response = client.post("/v1/analyze/backfill", json={"since": "2999-01-01T00:00:00Z"})
 
         assert response.status_code == 200
         assert response.json()["events_examined"] == 0
@@ -156,6 +152,27 @@ class TestHealthz:
         assert body["consecutive_failures"] == 0
         assert body["listener_connected"] is False
         assert body["notify_wakeups"] == 0
+
+    def test_reports_a_running_poller_and_listener_when_enabled(
+        self, polling_client: TestClient
+    ) -> None:
+        """The wiring production uses: lifespan starts both on boot.
+
+        Every other test here runs with them off, so without this the default
+        configuration would go unexercised.
+        """
+        assert polling_client.get("/healthz").json()["poller_running"] is True
+
+        # The listener connects in a background task, so `connected` flips a
+        # round trip after startup rather than during it. Health reporting that
+        # honestly is the point of the field; the test just has to wait for it.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if polling_client.get("/healthz").json()["listener_connected"]:
+                return
+            time.sleep(0.05)
+
+        raise AssertionError("listener never reported itself connected")
 
     def test_answers_503_when_the_database_is_down(self, client: TestClient) -> None:
         """A structured 503, not a 500 with a stack trace."""

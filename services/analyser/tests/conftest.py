@@ -32,9 +32,7 @@ DUMMY_DATABASE_URL = "postgresql://user:pass@localhost:5432/unused"
 
 #: Deliberately not the database docker-compose points the services at; see
 #: :func:`db_url`.
-DEFAULT_TEST_DATABASE_URL = (
-    "postgresql://kybershield:kybershield@localhost:5432/kybershield_test"
-)
+DEFAULT_TEST_DATABASE_URL = "postgresql://kybershield:kybershield@localhost:5432/kybershield_test"
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
@@ -154,11 +152,7 @@ class FakeAnalysisRepository:
         return [event for event in self.events if event.ingest_seq > cursor][:limit]
 
     def fetch_batch_since(self, since: datetime | None, limit: int, offset: int) -> list[Event]:
-        matching = [
-            event
-            for event in self.events
-            if since is None or event.occurred_at >= since
-        ]
+        matching = [event for event in self.events if since is None or event.occurred_at >= since]
         return matching[offset : offset + limit]
 
     def insert_alerts_ignore_dupes(self, drafts: Sequence[AlertDraft]) -> int:
@@ -249,9 +243,7 @@ def _create_database_if_absent(url: str) -> None:
     admin_url = urlunsplit(parsed._replace(path="/postgres"))
     # autocommit: CREATE DATABASE cannot run inside a transaction block.
     with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM pg_database WHERE datname = %s", (name,)
-        ).fetchone()
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
         if not exists:
             conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
 
