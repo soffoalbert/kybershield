@@ -6,6 +6,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ApiKeyStore, Clock, EventRepository } from '../domain/ports.js';
 import type { AgentEvent } from '../domain/types.js';
 import { requireApiKey } from '../plugins/auth.js';
+import { POST_EVENTS_BATCH_SCHEMA, POST_EVENT_SCHEMA } from '../schemas/openapi.js';
 
 export interface EventRoutesOptions {
   repository: EventRepository;
@@ -16,7 +17,7 @@ export interface EventRoutesOptions {
 }
 
 /**
- * Register `POST /v1/events` and `POST /v1/events:batch`.
+ * Register `POST /v1/events` and `POST /v1/events/batch`.
  *
  * Both require authentication; the caller registers {@link authPlugin} in the
  * same scope.
@@ -32,7 +33,7 @@ export interface EventRoutesOptions {
  * - `413` when the body exceeds `BODY_LIMIT_BYTES` (raised by Fastify).
  * - `503 {error:"storage_unavailable"}` on a StorageError.
  *
- * `POST /v1/events:batch`
+ * `POST /v1/events/batch`
  * - Body `{events: [...]}`, at most `maxBatchSize` entries.
  * - `207 {results:[{eventId, status}], accepted, duplicates, rejected:[{index, issues}]}`.
  *   Multi-status because a batch can legitimately mix outcomes; a single code
@@ -43,7 +44,10 @@ export interface EventRoutesOptions {
  *   `events`, or over the size limit).
  */
 export const eventRoutes: FastifyPluginAsync<EventRoutesOptions> = async (app, opts) => {
-  app.post('/v1/events', { preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })] }, async (request, reply) => {
+  app.post('/v1/events', {
+    schema: POST_EVENT_SCHEMA,
+    preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })],
+  }, async (request, reply) => {
     const client = request.client;
     if (!client) {
       reply.code(401).send({ error: 'unauthorized' });
@@ -53,7 +57,10 @@ export const eventRoutes: FastifyPluginAsync<EventRoutesOptions> = async (app, o
     const result = await opts.repository.insertIfAbsent(event);
     reply.code(result.status === 'created' ? 201 : 200).send({ eventId: result.eventId, status: result.status });
   });
-  app.post('/v1/events:batch', { preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })] }, async (request, reply) => {
+  app.post('/v1/events/batch', {
+    schema: POST_EVENTS_BATCH_SCHEMA,
+    preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })],
+  }, async (request, reply) => {
     const client = request.client;
     if (!client) {
       reply.code(401).send({ error: 'unauthorized' });

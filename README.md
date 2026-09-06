@@ -19,6 +19,18 @@ make seed        # post a realistic mixed event stream
 open http://localhost:8002/docs
 ```
 
+## Interactive API docs
+
+Every service serves browsable, try-it-out OpenAPI 3.1 documentation:
+
+| Service     | Swagger UI                     | ReDoc                           | Raw document                          |
+| ----------- | ------------------------------ | ------------------------------- | ------------------------------------- |
+| `ingestion` | http://localhost:3000/docs     | —                               | http://localhost:3000/docs/json       |
+| `analyser`  | http://localhost:8001/docs     | http://localhost:8001/redoc     | http://localhost:8001/openapi.json    |
+| `insights`  | http://localhost:8002/docs     | http://localhost:8002/redoc     | http://localhost:8002/openapi.json    |
+
+The ingestion endpoints require a key, so click **Authorize** in its Swagger UI and paste a secret from `API_KEYS` (`dev-secret-key` with the defaults) before using *Try it out*. The analyser and insights services are unauthenticated.
+
 The analyser polls every 5 seconds by default, so alerts appear a few seconds after seeding. To force a pass:
 
 ```bash
@@ -61,7 +73,7 @@ Authentication: `Authorization: Bearer <secret>`, where secrets come from the `A
 | Method | Path                | Notes                                                     |
 | ------ | ------------------- | --------------------------------------------------------- |
 | `POST` | `/v1/events`        | Single event. `201` created, `200` duplicate.              |
-| `POST` | `/v1/events:batch`  | Up to 100 events. `207` with a per-event result array.     |
+| `POST` | `/v1/events/batch`  | Up to 100 events. `207` with a per-event result array.     |
 | `GET`  | `/healthz`          | Liveness, no auth.                                         |
 | `GET`  | `/readyz`           | Readiness including a database probe, no auth.             |
 

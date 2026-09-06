@@ -5,6 +5,7 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import type { EventRepository } from '../domain/ports.js';
+import { HEALTHZ_SCHEMA, READYZ_SCHEMA } from '../schemas/openapi.js';
 
 export interface HealthRoutesOptions {
   repository: EventRepository;
@@ -21,10 +22,10 @@ export interface HealthRoutesOptions {
  * `503 {status:"degraded", database:false}`.
  */
 export const healthRoutes: FastifyPluginAsync<HealthRoutesOptions> = async (app, opts) => {
-  app.get('/healthz', async (request, reply) => {
+  app.get('/healthz', { schema: HEALTHZ_SCHEMA }, async (request, reply) => {
     reply.code(200).send({ status: 'ok' });
   });
-  app.get('/readyz', async (_, reply) => {
+  app.get('/readyz', { schema: READYZ_SCHEMA }, async (_, reply) => {
     const isReady = await opts.repository.healthCheck();
     reply.code(isReady ? 200 : 503).send({ status: isReady ? 'ready' : 'degraded', database: isReady });
   });  

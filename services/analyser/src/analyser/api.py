@@ -15,6 +15,8 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from analyser.openapi import APP_METADATA
+
 
 class RunResponse(BaseModel):
     """Result of a manual analysis pass."""
@@ -70,11 +72,18 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Build the FastAPI application.
 
+    Construct with ``FastAPI(lifespan=lifespan, **APP_METADATA)``. That gives
+    interactive Swagger UI at ``/docs`` and ReDoc at ``/redoc`` for free, with
+    the prose and tag groups defined in :mod:`analyser.openapi`.
+
+    Give every route a ``tags=[...]``, a ``summary=``, and a ``response_model=``
+    so the generated document is navigable rather than a flat list of paths.
+
     Routes:
-        POST /v1/analyze/run       Drain the backlog now, return a RunResponse.
-        POST /v1/analyze/backfill  Re-run rules over history, return a RunResponse.
-        GET  /v1/rules             List registered rules and their config.
-        GET  /healthz              Liveness, database reachability, poller state.
+        POST /v1/analyze/run       tags=["analysis"] -> RunResponse
+        POST /v1/analyze/backfill  tags=["analysis"] -> RunResponse
+        GET  /v1/rules             tags=["rules"]    -> list[RuleInfo]
+        GET  /healthz              tags=["health"]   -> HealthResponse
     """
     raise NotImplementedError
 

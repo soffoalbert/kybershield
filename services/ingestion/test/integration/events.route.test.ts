@@ -101,7 +101,7 @@ describe('POST /v1/events', () => {
   it.todo('never echoes the submitted payload in an error response');
 });
 
-describe('POST /v1/events:batch', () => {
+describe('POST /v1/events/batch', () => {
   it.todo('stores every event in a fully new batch and answers 207');
 
   it.todo('reports a mix of created and duplicate across the batch');

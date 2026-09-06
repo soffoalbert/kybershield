@@ -15,6 +15,7 @@ from fastapi import FastAPI, Query
 from pycommon import Severity
 
 from insights.models import AgentSummary, AlertListItem, HealthResponse, Page, TimelineItem
+from insights.openapi import APP_METADATA
 
 
 @asynccontextmanager
@@ -28,6 +29,16 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Build the FastAPI application.
+
+    Construct with ``FastAPI(lifespan=lifespan, **APP_METADATA)``. That gives
+    interactive Swagger UI at ``/docs`` and ReDoc at ``/redoc`` for free, with
+    the prose and tag groups defined in :mod:`insights.openapi`.
+
+    Give every route a ``tags=[...]``, a ``summary=``, and a
+    ``response_model=`` from :mod:`insights.models`; the response model is what
+    turns the generated document into something a dashboard client can be
+    generated from. Declare query parameters with ``Query(..., description=)``
+    so the filters are self-documenting in the UI.
 
     Routes:
         GET /v1/alerts
