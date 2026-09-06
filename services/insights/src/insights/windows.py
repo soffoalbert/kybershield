@@ -6,40 +6,36 @@ being duplicated at each boundary.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import re
+from datetime import datetime, timedelta, timezone
+
+#: Suffix to the `timedelta` keyword it names. Doubles as the set of units the
+#: pattern below accepts, so the two cannot drift apart.
+_UNITS = {"m": "minutes", "h": "hours", "d": "days"}
+
+_WINDOW_PATTERN = re.compile(rf"(\d+)([{''.join(_UNITS)}])")
 
 
 def parse_window(window: str) -> timedelta:
     """Parse a shorthand duration such as `30m`, `24h`, or `7d`.
 
-    Accepts an integer followed by one of `m`, `h`, `d`. Case-insensitive.
+    Accepts a positive integer followed by one of `m`, `h`, `d`.
+    Case-insensitive, and surrounding whitespace is ignored.
 
     Raises:
         ValueError: On an unrecognised suffix, a non-integer quantity, or a
-            zero or negative duration.
+            zero duration. The pattern makes a negative one unreachable.
     """
-    if not isinstance(window, str):
-        raise ValueError(f"window must be a string, got {type(window)}")
-    s = window.strip().lower()
-    match = re.fullmatch(r"(\d+)([mhd])", s)
+    match = _WINDOW_PATTERN.fullmatch(window.strip().lower())
     if not match:
         raise ValueError(f"Invalid window format: {window!r}")
-    qty, unit = match.groups()
-    try:
-        qty = int(qty)
-    except Exception:
-        raise ValueError(f"Non-integer window quantity: {qty!r}")
-    if qty <= 0:
-        raise ValueError(f"Window must be positive, got {qty}")
-    if unit == "m":
-        return timedelta(minutes=qty)
-    elif unit == "h":
-        return timedelta(hours=qty)
-    elif unit == "d":
-        return timedelta(days=qty)
-    else:
-        raise ValueError(f"Unrecognised window unit: {unit!r}")
+
+    quantity, unit = match.groups()
+    # The pattern guarantees digits, so this cannot raise.
+    amount = int(quantity)
+    if amount == 0:
+        raise ValueError(f"Window must be positive, got {window!r}")
+    return timedelta(**{_UNITS[unit]: amount})
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -58,16 +54,19 @@ def resolve_window(
 ) -> tuple[datetime, datetime]:
     """Resolve the assorted ways a caller can express a time range.
 
-    Precedence, most explicit first:
+    Precedence, most explicit first. An explicit bound always beats `window`,
+    so passing both `since` and `window` uses `since` and ignores `window`:
     1. Both `since` and `until` given: used verbatim.
-    2. `window` given: `(now - window, now]`.
-    3. `since` only: `(since, now]`.
+    2. `since` only: `(since, now]`.
+    3. `window` given: `(now - window, now]`.
     4. Nothing: `(now - default_hours, now]`.
 
     Naive datetimes are treated as UTC rather than rejected, since a teammate
     passing `2026-08-25T10:00:00` plainly means UTC here.
 
     Args:
+        default_hours: Fallback span. Validated positive by the config, so it
+            is not re-checked on every request.
         now: Injectable current time, so window logic is testable without
             freezing the clock globally.
 
@@ -95,14 +94,9 @@ def resolve_window(
             return (since_utc, now)
 
     if window is not None:
-        window_td = parse_window(window)
-        start = now - window_td
-        if start > now:
-            raise ValueError(f"Calculated start ({start}) is after now ({now}) using window={window!r}")
-        return (start, now)
+        # `parse_window` rejects a zero or negative duration, so the resulting
+        # start is always in the past.
+        return (now - parse_window(window), now)
 
     # Default: (now - default_hours, now]
-    if default_hours <= 0:
-        raise ValueError(f"default_hours must be positive, got {default_hours}")
-    start = now - timedelta(hours=default_hours)
-    return (start, now)
+    return (now - timedelta(hours=default_hours), now)

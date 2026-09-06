@@ -1,6 +1,14 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
+# `python` is not on PATH on a stock macOS or Debian box, and the system
+# interpreter is often too old for these services. `make install` creates a
+# per-service virtualenv; the targets below prefer it and fall back to PYTHON
+# so a developer with their own environment activated is not overridden.
+PYTHON ?= python3
+ANALYSER_PY := $(if $(wildcard services/analyser/.venv/bin/python),../../services/analyser/.venv/bin/python,$(PYTHON))
+INSIGHTS_PY := $(if $(wildcard services/insights/.venv/bin/python),../../services/insights/.venv/bin/python,$(PYTHON))
+
 .DEFAULT_GOAL := help
 
 .PHONY: help up down logs db-reset psql seed test test-ingestion test-analyser test-insights install
@@ -29,9 +37,9 @@ psql: ## Open a psql shell against the running database
 	$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-kybershield} -d $${POSTGRES_DB:-kybershield}
 
 install: ## Install local dev dependencies for every service
-	cd services/ingestion && npm install
-	cd services/analyser && python -m pip install -e ../../packages/pycommon -e '.[dev]'
-	cd services/insights && python -m pip install -e ../../packages/pycommon -e '.[dev]'
+	cd services/ingestion && npm ci
+	cd services/analyser && $(PYTHON) -m venv .venv && .venv/bin/python -m pip install -q -e ../../packages/pycommon -e '.[dev]'
+	cd services/insights && $(PYTHON) -m venv .venv && .venv/bin/python -m pip install -q -e ../../packages/pycommon -e '.[dev]'
 
 seed: ## Post a realistic mixed event stream at the running ingestion service
 	cd services/ingestion && npm run seed
@@ -42,7 +50,7 @@ test-ingestion: ## Run the ingestion test suite
 	cd services/ingestion && npm test
 
 test-analyser: ## Run the analyser test suite
-	cd services/analyser && python -m pytest
+	cd services/analyser && $(ANALYSER_PY) -m pytest
 
 test-insights: ## Run the insights test suite
-	cd services/insights && python -m pytest
+	cd services/insights && $(INSIGHTS_PY) -m pytest

@@ -106,9 +106,17 @@ class TestAnalyzeBackfill:
         assert body["cursor_before"] == body["cursor_after"] == 0
 
     def test_rejects_a_malformed_since(self, client: TestClient) -> None:
+        """400 with the shared `{error, issues}` envelope, not FastAPI's
+        default 422 `{detail}`: a bad body is the same class of client mistake
+        the ingestion service already answers 400 for, and one error shape
+        across all three services is one less thing for a client to branch on.
+        """
         response = client.post("/v1/analyze/backfill", json={"since": "not-a-timestamp"})
 
-        assert response.status_code == 422
+        assert response.status_code == 400
+        body = response.json()
+        assert body["error"] == "validation_failed"
+        assert [issue["path"] for issue in body["issues"]] == ["since"]
 
 
 class TestListRules:

@@ -136,7 +136,29 @@ AGENT_TIMELINE_SQL = """
            AND created_at <= %(end)s
       ) merged
      ORDER BY ts DESC, kind, reference_id
-     LIMIT %(limit)s
+     LIMIT %(limit)s OFFSET %(offset)s
+"""
+
+#: Companion count for :data:`AGENT_TIMELINE_SQL`, so `Page.total` means the
+#: same thing here as it does on the alerts feed: every matching row, not the
+#: size of the page just returned.
+#:
+#: Two counts summed rather than a COUNT(*) over the UNION, which would make
+#: Postgres materialise both branches only to discard every column.
+COUNT_AGENT_TIMELINE_SQL = """
+    SELECT (
+        SELECT count(*)
+          FROM events
+         WHERE agent_id = %(agent_id)s
+           AND occurred_at >= %(start)s
+           AND occurred_at <= %(end)s
+    ) + (
+        SELECT count(*)
+          FROM alerts
+         WHERE agent_id = %(agent_id)s
+           AND created_at >= %(start)s
+           AND created_at <= %(end)s
+    ) AS total
 """
 
 
@@ -163,9 +185,10 @@ class InsightsRepository(Protocol):
         ...
 
     def agent_timeline(
-        self, agent_id: str, start: datetime, end: datetime, limit: int
-    ) -> list[TimelineItem]:
-        """Return the agent's events and alerts merged, newest first."""
+        self, agent_id: str, start: datetime, end: datetime, limit: int, offset: int
+    ) -> tuple[list[TimelineItem], int]:
+        """Return one page of the agent's merged events and alerts, and the
+        total number matching the window."""
         ...
 
     def healthy(self) -> bool:
@@ -194,6 +217,11 @@ class PgInsightsRepository:
         An unknown `agent_id` yields an empty page with `total` of 0, not an
         error: the caller asked a well-formed question whose answer is
         "nothing", and 404 would conflate that with a bad request.
+
+        The page and its count share one transaction. On the pool's autocommit
+        connections each statement would otherwise take its own snapshot, and
+        the analyser writes alerts continuously, so `total` could contradict
+        the page it describes.
         """
         params = {
             "since": since,
@@ -203,11 +231,11 @@ class PgInsightsRepository:
             "severity_min": severity_min.value if severity_min else None,
         }
 
-        with self._db.connection() as conn:
-            rows = conn.execute(
+        with self._db.transaction() as cur:
+            rows = cur.execute(
                 LIST_ALERTS_SQL, {**params, "limit": limit, "offset": offset}
             ).fetchall()
-            count_row = conn.execute(COUNT_ALERTS_SQL, params).fetchone()
+            count_row = cur.execute(COUNT_ALERTS_SQL, params).fetchone()
 
         alert_list = [
             AlertListItem(
@@ -233,6 +261,10 @@ class PgInsightsRepository:
         An agent with no alerts in the window returns a populated summary with
         `total_alerts` of 0 and a null `max_severity`, so a dashboard can
         render "quiet" rather than handle a missing response.
+
+        All three statements share one transaction: a summary whose totals,
+        top rules, and event count each saw a different snapshot would be
+        internally inconsistent for no gain.
         """
         params = {
             "agent_id": agent_id,
@@ -240,10 +272,10 @@ class PgInsightsRepository:
             "end": end,
         }
 
-        with self._db.connection() as conn:
-            agg_row = conn.execute(AGENT_SUMMARY_SQL, params).fetchone()
-            event_count_row = conn.execute(COUNT_EVENTS_SQL, params).fetchone()
-            top_rules_rows = conn.execute(
+        with self._db.transaction() as cur:
+            agg_row = cur.execute(AGENT_SUMMARY_SQL, params).fetchone()
+            event_count_row = cur.execute(COUNT_EVENTS_SQL, params).fetchone()
+            top_rules_rows = cur.execute(
                 TOP_RULES_SQL, {**params, "limit": top_rules_limit}
             ).fetchall()
 
@@ -261,17 +293,24 @@ class PgInsightsRepository:
         )
 
     def agent_timeline(
-        self, agent_id: str, start: datetime, end: datetime, limit: int
-    ) -> list[TimelineItem]:
-        """Run :data:`AGENT_TIMELINE_SQL` and map rows to TimelineItems."""
+        self, agent_id: str, start: datetime, end: datetime, limit: int, offset: int
+    ) -> tuple[list[TimelineItem], int]:
+        """Run :data:`AGENT_TIMELINE_SQL` and its companion count.
+
+        Both statements share one repeatable-read transaction so the page and
+        the total cannot disagree about how many rows exist, which is otherwise
+        possible while the analyser is writing alerts.
+        """
         params = {
             "agent_id": agent_id,
             "start": start,
             "end": end,
-            "limit": limit,
         }
-        with self._db.connection() as conn:
-            rows = conn.execute(AGENT_TIMELINE_SQL, params).fetchall()
+        with self._db.transaction() as cur:
+            rows = cur.execute(
+                AGENT_TIMELINE_SQL, {**params, "limit": limit, "offset": offset}
+            ).fetchall()
+            count_row = cur.execute(COUNT_AGENT_TIMELINE_SQL, params).fetchone()
         timeline = [
             TimelineItem(
                 timestamp=row["ts"],
@@ -283,7 +322,7 @@ class PgInsightsRepository:
             )
             for row in rows
         ]
-        return timeline
+        return timeline, (count_row["total"] if count_row else 0)
 
     def healthy(self) -> bool:
         """Delegate to the database health probe."""

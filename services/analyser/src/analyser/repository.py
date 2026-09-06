@@ -142,14 +142,14 @@ class PgAnalysisRepository:
         """Run :data:`FETCH_BATCH_SQL` and map rows to Events."""
         with self.db.connection() as conn:
             rows = conn.execute(FETCH_BATCH_SQL, {"cursor": cursor, "limit": limit}).fetchall()
-        return [Event(**row) for row in rows]
+        return [Event.from_row(row) for row in rows]
 
     def fetch_batch_since(self, since: datetime | None, limit: int, offset: int) -> list[Event]:
         """Page through history by `occurred_at` for a backfill."""
         params = {"since": since, "limit": limit, "offset": offset}
         with self.db.connection() as conn:
             rows = conn.execute(FETCH_BATCH_SINCE_SQL, params).fetchall()
-        return [Event(**row) for row in rows]
+        return [Event.from_row(row) for row in rows]
 
     def insert_alerts_ignore_dupes(self, drafts: Sequence[AlertDraft]) -> int:
         """Insert all drafts in one transaction, counting returned ids.

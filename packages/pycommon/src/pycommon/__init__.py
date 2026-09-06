@@ -12,7 +12,8 @@ from pycommon.entities import (
     EventType,
     Severity,
 )
-from pycommon.settings import BaseServiceSettings
+from pycommon.errors import ValidationFailed, install_error_handlers
+from pycommon.settings import BaseServiceSettings, configure_logging
 
 __all__ = [
     "Alert",
@@ -22,5 +23,8 @@ __all__ = [
     "Event",
     "EventType",
     "Severity",
+    "ValidationFailed",
+    "configure_logging",
     "dict_row_factory",
+    "install_error_handlers",
 ]

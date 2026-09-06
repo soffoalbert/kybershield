@@ -13,8 +13,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
-from pycommon import Database, Severity
+from fastapi import FastAPI, Query, Request, Response
+from pycommon import (
+    Database,
+    Severity,
+    ValidationFailed,
+    configure_logging,
+    install_error_handlers,
+)
 
 from insights.config import InsightsConfig, get_config
 from insights.models import AgentSummary, AlertListItem, HealthResponse, Page, TimelineItem
@@ -32,9 +38,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     should fail to start rather than accept traffic and fail every request.
     """
     config = get_config()
+    configure_logging(config.log_level)
 
     db = Database(
-        config.database_url,
+        config.psycopg_conninfo,
         min_size=config.db_pool_min_size,
         max_size=config.db_pool_max_size,
         application_name="kybershield-insights",
@@ -61,11 +68,15 @@ def _window(
 
     `resolve_window` raises `ValueError` for an unparseable `window` or an
     inverted range, both of which are the caller's mistake rather than ours.
+
+    Reported against `window` when that is what was supplied, and against
+    `since` otherwise, so the issue names the parameter the caller actually
+    sent rather than a generic "range".
     """
     try:
         return resolve_window(since, until, window, config.default_window_hours)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ValidationFailed.at("window" if window else "since", str(exc)) from exc
 
 
 def create_app() -> FastAPI:
@@ -79,6 +90,9 @@ def create_app() -> FastAPI:
     stall every other request.
     """
     app = FastAPI(lifespan=lifespan, **APP_METADATA)
+    # Same `{error, issues}` envelope the ingestion service returns, so a
+    # client parses one error shape across all three.
+    install_error_handlers(app)
 
     @app.get(
         "/v1/alerts",
@@ -162,19 +176,24 @@ def create_app() -> FastAPI:
         since: datetime | None = Query(None, description="Start of the window (ISO-8601)"),
         until: datetime | None = Query(None, description="End of the window (ISO-8601)"),
         window: str | None = Query(None, description="Window shorthand, e.g. 30m, 24h, 7d"),
-        limit: int | None = Query(None, ge=1, description="Maximum entries"),
+        limit: int | None = Query(None, ge=1, description="Rows per page"),
+        offset: int = Query(0, ge=0, description="Rows to skip"),
     ) -> Page[TimelineItem]:
-        """Events and alerts interleaved, newest first."""
+        """Events and alerts interleaved, newest first.
+
+        Paged like the alerts feed: `total` counts every entry in the window,
+        not the size of the page just returned.
+        """
         config: InsightsConfig = request.app.state.config
         repo: PgInsightsRepository = request.app.state.repository
 
         start, end = _window(config, since, until, window)
         page_size = min(limit or config.default_page_size, config.max_page_size)
 
-        items = await asyncio.to_thread(repo.agent_timeline, agent_id, start, end, page_size)
-        return Page[TimelineItem](
-            items=items, total=len(items), limit=page_size, offset=0
+        items, total = await asyncio.to_thread(
+            repo.agent_timeline, agent_id, start, end, page_size, offset
         )
+        return Page[TimelineItem](items=items, total=total, limit=page_size, offset=offset)
 
     @app.get(
         "/healthz",

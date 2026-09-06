@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from pycommon import Database
+from pycommon import Database, configure_logging, install_error_handlers
 from pydantic import BaseModel
 
 from analyser.config import AnalyserConfig, get_config, rule_config
@@ -105,9 +105,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     so the pool is sized without counting it.
     """
     config = get_config()
+    configure_logging(config.log_level)
 
     db = Database(
-        config.database_url,
+        config.psycopg_conninfo,
         min_size=config.db_pool_min_size,
         max_size=config.db_pool_max_size,
         application_name="kybershield-analyser",
@@ -125,7 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     listener = (
         IngestListener(
-            config.database_url,
+            config.psycopg_conninfo,
             config.notify_channel,
             config.listen_reconnect_seconds,
         )
@@ -162,6 +163,9 @@ def create_app() -> FastAPI:
     block the event loop and stall every other request.
     """
     app = FastAPI(lifespan=lifespan, **APP_METADATA)
+    # Same `{error, issues}` envelope the ingestion service returns, so a
+    # client parses one error shape across all three.
+    install_error_handlers(app)
 
     @app.post(
         "/v1/analyze/run",

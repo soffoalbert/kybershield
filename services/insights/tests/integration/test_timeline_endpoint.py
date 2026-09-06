@@ -252,10 +252,43 @@ class TestResponseEnvelope:
 
         body = client.get("/v1/agents/agent-alpha/timeline", params={"limit": 10}).json()
 
-        assert set(body) == {"items", "total", "limit", "offset"}
+        assert set(body) == {"items", "total", "limit", "offset", "has_more"}
         assert body["total"] == 1
         assert body["limit"] == 10
         assert body["offset"] == 0
+        assert body["has_more"] is False
+
+    def test_total_counts_the_whole_window_not_the_page(
+        self, client: TestClient, db: Database, now: datetime
+    ) -> None:
+        """`total` is what sizes a paginator, so it must ignore `limit`."""
+        for minute in range(5):
+            seed_event(db, occurred_at=now - timedelta(minutes=minute + 1))
+
+        body = client.get("/v1/agents/agent-alpha/timeline", params={"limit": 2}).json()
+
+        assert len(body["items"]) == 2
+        assert body["total"] == 5
+        assert body["has_more"] is True
+
+    def test_offset_walks_the_merged_stream(
+        self, client: TestClient, db: Database, now: datetime
+    ) -> None:
+        for minute in range(4):
+            seed_event(db, occurred_at=now - timedelta(minutes=minute + 1))
+
+        first = client.get(
+            "/v1/agents/agent-alpha/timeline", params={"limit": 2, "offset": 0}
+        ).json()
+        second = client.get(
+            "/v1/agents/agent-alpha/timeline", params={"limit": 2, "offset": 2}
+        ).json()
+
+        first_ids = [item["reference_id"] for item in first["items"]]
+        second_ids = [item["reference_id"] for item in second["items"]]
+        assert not set(first_ids) & set(second_ids)
+        assert second["offset"] == 2
+        assert second["has_more"] is False
 
     def test_rejects_an_unparseable_window(self, client: TestClient) -> None:
         response = client.get("/v1/agents/agent-alpha/timeline", params={"window": "7w"})

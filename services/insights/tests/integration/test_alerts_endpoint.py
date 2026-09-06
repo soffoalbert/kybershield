@@ -228,7 +228,13 @@ class TestEmptyResults:
     def test_empty_database_returns_an_empty_page(self, client: TestClient) -> None:
         body = get_alerts(client)
 
-        assert body == {"items": [], "total": 0, "limit": 50, "offset": 0}
+        assert body == {
+            "items": [],
+            "total": 0,
+            "limit": 50,
+            "offset": 0,
+            "has_more": False,
+        }
 
 
 class TestResponseShape:

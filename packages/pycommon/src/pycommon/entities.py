@@ -94,8 +94,24 @@ class Event:
         Expects the column names used in db/migrations/001_init.sql. Raises
         KeyError if a required column is absent, which is intentional: a
         missing column is a query bug, not a runtime condition to tolerate.
+
+        `tags` and `client_id` carry dataclass defaults, so a query that omits
+        them still maps; every other column is required.
         """
-        raise NotImplementedError
+        return cls(
+            event_id=row["event_id"],
+            ingest_seq=row["ingest_seq"],
+            agent_id=row["agent_id"],
+            occurred_at=row["occurred_at"],
+            received_at=row["received_at"],
+            type=row["type"],
+            payload=row["payload"],
+            raw=row["raw"],
+            # `or []` rather than `.get(..., [])`: the column is NOT NULL with a
+            # '{}' default, but a LEFT JOIN can still surface it as None.
+            tags=list(row.get("tags") or []),
+            client_id=row.get("client_id", ""),
+        )
 
 
 @dataclass(frozen=True)
@@ -129,5 +145,18 @@ class Alert:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> Alert:
-        """Build an Alert from a psycopg dict row."""
-        raise NotImplementedError
+        """Build an Alert from a psycopg dict row.
+
+        `alert_id` is stringified because psycopg returns the UUID column as a
+        `uuid.UUID`, while every HTTP boundary wants a plain string.
+        """
+        return cls(
+            alert_id=str(row["alert_id"]),
+            event_id=row["event_id"],
+            agent_id=row["agent_id"],
+            created_at=row["created_at"],
+            rule=row["rule"],
+            severity=Severity(row["severity"]),
+            summary=row["summary"],
+            details=row.get("details"),
+        )

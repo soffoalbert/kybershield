@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import typer
-from pycommon import Database
+from pycommon import Database, configure_logging
 
 from analyser.config import get_config, rule_config
 from analyser.engine import AnalysisEngine, RunReport
@@ -36,8 +36,9 @@ def _engine() -> Iterator[AnalysisEngine]:
     pass, so the pool is opened and drained around it rather than kept warm.
     """
     config = get_config()
+    configure_logging(config.log_level)
     db = Database(
-        config.database_url,
+        config.psycopg_conninfo,
         min_size=1,
         max_size=config.db_pool_max_size,
         application_name="kybershield-analyser-cli",

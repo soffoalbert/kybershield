@@ -84,11 +84,19 @@ class TestPage:
         assert body["offset"] == 0
         assert body["items"][0]["alert_id"] == "11111111-1111-1111-1111-111111111111"
 
-    def test_has_more_is_not_part_of_the_serialised_body(self) -> None:
-        """It is a property, so a client computes it from total and offset."""
+    def test_has_more_is_part_of_the_serialised_body(self) -> None:
+        """It is a computed field, so a client reads it rather than
+        re-deriving pagination arithmetic the server already did."""
         page = Page[str](items=["a"], total=5, limit=2, offset=0)
 
-        assert "has_more" not in page.model_dump()
+        assert page.model_dump()["has_more"] is True
+
+    def test_has_more_is_false_on_the_last_page(self) -> None:
+        """Keyed on the rows actually returned, not on `offset + limit`, so a
+        short final page does not advertise a page that is not there."""
+        page = Page[str](items=["d"], total=4, limit=2, offset=3)
+
+        assert page.model_dump()["has_more"] is False
 
 
 class TestAgentSummary:
