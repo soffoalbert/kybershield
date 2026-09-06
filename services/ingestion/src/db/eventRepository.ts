@@ -173,6 +173,5 @@ export class PgEventRepository implements EventRepository {
     } finally {
       client.release();
     }
-    return false;
   }
 }
