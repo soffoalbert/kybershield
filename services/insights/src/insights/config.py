@@ -28,4 +28,4 @@ class InsightsConfig(BaseServiceSettings):
 @lru_cache(maxsize=1)
 def get_config() -> InsightsConfig:
     """Return the process-wide config, parsed once."""
-    raise NotImplementedError
+    return InsightsConfig()  # Uses environment variables if defined

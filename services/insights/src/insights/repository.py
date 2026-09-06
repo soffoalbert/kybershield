@@ -175,7 +175,7 @@ class PgInsightsRepository:
     """PostgreSQL implementation of :class:`InsightsRepository`."""
 
     def __init__(self, db: Database) -> None:
-        raise NotImplementedError
+        self._db = db
 
     def list_alerts(
         self,
@@ -193,7 +193,38 @@ class PgInsightsRepository:
         error: the caller asked a well-formed question whose answer is
         "nothing", and 404 would conflate that with a bad request.
         """
-        raise NotImplementedError
+        params = {
+            "since": since,
+            "until": until,
+            "agent_id": agent_id,
+            "rule": rule,
+            "severity_min": severity_min,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        rows = self._db.query(LIST_ALERTS_SQL, params)
+        alert_list = [
+            AlertListItem(
+                alert_id=row["alert_id"],
+                agent_id=row["agent_id"],
+                event_id=row["event_id"],
+                created_at=row["created_at"],
+                rule=row["rule"],
+                severity=row["severity"],
+                summary=row["summary"],
+            )
+            for row in rows
+        ]
+
+        count_params = {
+            key: params[key]
+            for key in ["since", "until", "agent_id", "rule", "severity_min"]
+        }
+        count_row = self._db.query_one(COUNT_ALERTS_SQL, count_params)
+        total = count_row["total"] if count_row else 0
+
+        return alert_list, total
 
     def agent_summary(self, agent_id: str, start: datetime, end: datetime) -> AgentSummary:
         """Assemble a summary from the aggregate, top-rules, and event-count queries.
@@ -202,14 +233,68 @@ class PgInsightsRepository:
         `total_alerts` of 0 and a null `max_severity`, so a dashboard can
         render "quiet" rather than handle a missing response.
         """
-        raise NotImplementedError
+        params = {
+            "agent_id": agent_id,
+            "start": start,
+            "end": end
+        }
+
+        # Aggregate alerts by severity for the agent
+        agg_row = self._db.query_one(AGENT_SUMMARY_SQL, params)
+        total_alerts = agg_row["total_alerts"] if agg_row and "total_alerts" in agg_row else 0
+        max_severity = agg_row["max_severity"] if agg_row else None
+        severity_counts = agg_row["severity_counts"] if agg_row else {}
+
+        # Get total events for the period
+        event_count_row = self._db.query_one(COUNT_EVENTS_SQL, params)
+        total_events = event_count_row["total_events"] if event_count_row and "total_events" in event_count_row else 0
+
+        # Get top rules for the period (limit 3, for example)
+        top_rules_params = dict(params)
+        top_rules_params["limit"] = 3
+        top_rules_rows = self._db.query(TOP_RULES_SQL, top_rules_params)
+        top_rules = [
+            {"rule": row["rule"], "count": row["count"]}
+            for row in top_rules_rows
+        ]
+
+        return AgentSummary(
+            total_alerts=total_alerts,
+            max_severity=max_severity,
+            severity_counts=severity_counts,
+            total_events=total_events,
+            top_rules=top_rules,
+        )
 
     def agent_timeline(
         self, agent_id: str, start: datetime, end: datetime, limit: int
     ) -> list[TimelineItem]:
         """Run :data:`AGENT_TIMELINE_SQL` and map rows to TimelineItems."""
-        raise NotImplementedError
+        params = {
+            "agent_id": agent_id,
+            "start": start,
+            "end": end,
+            "limit": limit,
+        }
+        rows = self._db.query(AGENT_TIMELINE_SQL, params)
+        timeline = [
+            TimelineItem(
+                ts=row["ts"],
+                kind=row["kind"],
+                reference_id=row["reference_id"],
+                brief=row["brief"],
+                severity=row["severity"],
+                rule=row["rule"],
+            )
+            for row in rows
+        ]
+        return timeline
 
     def healthy(self) -> bool:
         """Delegate to the database health probe."""
-        raise NotImplementedError
+        try:
+            # Simple health check
+            self._db.query_one("SELECT 1", {})
+            return True
+        except Exception:
+            return False
