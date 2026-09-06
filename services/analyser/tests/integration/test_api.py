@@ -7,164 +7,162 @@ one and assertions are not racing a background loop.
 from __future__ import annotations
 
 import pytest
-import requests
-from time import sleep
+from fastapi.testclient import TestClient
+from pycommon import Database
+
+from tests.integration.conftest import read_alerts, seed_event, seed_secret_read
 
 pytestmark = pytest.mark.integration
 
-BASE_URL = "http://localhost:8080"  # Adjust if necessary
-
 
 class TestAnalyzeRun:
-    def test_returns_a_run_report(self) -> None:
-        """POST /v1/analyze/run answers 200 with the counts and cursor movement."""
-        resp = requests.post(f"{BASE_URL}/v1/analyze/run")
-        assert resp.status_code == 200
-        data = resp.json()
-        for key in ("written", "counts", "cursor"):
-            assert key in data
+    def test_returns_a_run_report(self, client: TestClient) -> None:
+        response = client.post("/v1/analyze/run")
 
-    def test_writes_alerts_for_pending_events(self) -> None:
-        # Setup: Add an event that should trigger an alert
-        event = {"event_type": "pending_alert", "details": {"foo": "bar"}}
-        requests.post(f"{BASE_URL}/v1/events", json=[event])
-        resp = requests.post(f"{BASE_URL}/v1/analyze/run")
-        data = resp.json()
-        assert resp.status_code == 200
-        # At least one written
-        assert data["written"] > 0
-        # The event is now handled, subsequent run should not write it again
-        resp2 = requests.post(f"{BASE_URL}/v1/analyze/run")
-        assert resp2.json()["written"] == 0
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {
+            "events_examined",
+            "alerts_generated",
+            "alerts_written",
+            "cursor_before",
+            "cursor_after",
+            "duration_ms",
+            "rule_failures",
+        }
+        assert body["events_examined"] == 0
+        assert body["cursor_before"] == body["cursor_after"] == 0
+        assert body["rule_failures"] == []
 
-    def test_reports_zero_written_on_a_second_call(self) -> None:
-        # First call: should process all available events
-        requests.post(f"{BASE_URL}/v1/analyze/run")
-        # Second call: nothing new, so written should be 0
-        resp = requests.post(f"{BASE_URL}/v1/analyze/run")
-        assert resp.status_code == 200
-        assert resp.json()["written"] == 0
+    def test_writes_alerts_for_pending_events(
+        self, db: Database, client: TestClient
+    ) -> None:
+        seed_secret_read(db, event_id="evt-1")
 
-    def test_answers_503_when_the_database_is_unreachable(self) -> None:
-        # Simulate database down (assuming test DB can be stopped/refused)
-        # This requires the test DB to be controllable from the test context.
-        # For CI: skip or mock DB failures.
-        try:
-            requests.post(f"{BASE_URL}/v1/analyze/run", timeout=3)
-        except requests.exceptions.ConnectionError:
-            pytest.skip("Database is not running; unable to test 503 scenario")
-        else:
-            resp = requests.post(f"{BASE_URL}/v1/analyze/run", headers={"X-Simulate-DB-Down": "1"})
-            assert resp.status_code == 503
+        body = client.post("/v1/analyze/run").json()
+
+        assert body["events_examined"] == 1
+        assert body["alerts_written"] == 1
+        assert body["cursor_after"] > body["cursor_before"]
+        assert [alert.rule for alert in read_alerts(db)] == ["secret_file_access"]
+
+    def test_reports_zero_written_on_a_second_call(
+        self, db: Database, client: TestClient
+    ) -> None:
+        seed_secret_read(db)
+        client.post("/v1/analyze/run")
+
+        body = client.post("/v1/analyze/run").json()
+
+        assert body["events_examined"] == 0
+        assert body["alerts_written"] == 0
+
+    def test_drain_clears_a_backlog_larger_than_one_batch(
+        self, db: Database, client: TestClient
+    ) -> None:
+        """What a reviewer wants right after seeding demo data."""
+        for seq in range(1, 4):
+            seed_secret_read(db, event_id=f"evt-{seq}")
+
+        body = client.post("/v1/analyze/run", params={"drain": True}).json()
+
+        assert body["events_examined"] == 3
+        assert body["alerts_written"] == 3
+
+    def test_runs_the_rules_the_environment_configured(
+        self, db: Database, client: TestClient
+    ) -> None:
+        """ALLOWED_DOMAINS reaches the rule through the app's own config."""
+        seed_event(db, type_="http_request", payload={"url": "https://evil.example.com"})
+
+        body = client.post("/v1/analyze/run").json()
+
+        assert body["alerts_written"] == 1
+        assert [alert.rule for alert in read_alerts(db)] == ["domain_allowlist"]
+        assert body["rule_failures"] == []
 
 
 class TestAnalyzeBackfill:
-    def test_accepts_an_empty_body(self) -> None:
+    def test_accepts_an_empty_body(self, db: Database, client: TestClient) -> None:
         """No `since` means all history."""
-        resp = requests.post(f"{BASE_URL}/v1/analyze/backfill", json={})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "written" in data
+        seed_secret_read(db)
 
-    def test_accepts_a_since_timestamp(self) -> None:
-        payload = {"since": "2024-01-01T00:00:00Z"}
-        resp = requests.post(f"{BASE_URL}/v1/analyze/backfill", json=payload)
-        assert resp.status_code == 200
-        assert "written" in resp.json()
+        response = client.post("/v1/analyze/backfill", json={})
 
-    def test_rejects_a_malformed_since(self) -> None:
-        payload = {"since": "not-a-timestamp"}
-        resp = requests.post(f"{BASE_URL}/v1/analyze/backfill", json=payload)
-        assert resp.status_code == 400 or (
-            resp.status_code == 422  # Depending on API style
+        assert response.status_code == 200
+        assert response.json()["alerts_written"] == 1
+
+    def test_accepts_a_since_timestamp(self, db: Database, client: TestClient) -> None:
+        seed_secret_read(db)
+
+        response = client.post(
+            "/v1/analyze/backfill", json={"since": "2999-01-01T00:00:00Z"}
         )
+
+        assert response.status_code == 200
+        assert response.json()["events_examined"] == 0
+
+    def test_leaves_the_cursor_where_it_was(self, db: Database, client: TestClient) -> None:
+        seed_secret_read(db)
+
+        body = client.post("/v1/analyze/backfill", json={}).json()
+
+        assert body["cursor_before"] == body["cursor_after"] == 0
+
+    def test_rejects_a_malformed_since(self, client: TestClient) -> None:
+        response = client.post("/v1/analyze/backfill", json={"since": "not-a-timestamp"})
+
+        assert response.status_code == 422
 
 
 class TestListRules:
-    def test_lists_every_registered_rule(self) -> None:
-        resp = requests.get(f"{BASE_URL}/v1/rules")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-        assert all("name" in rule for rule in data)
+    def test_lists_every_registered_rule(self, client: TestClient) -> None:
+        response = client.get("/v1/rules")
 
-    def test_includes_the_effective_configuration(self) -> None:
-        """A reviewer can read the live thresholds without inspecting the container's environment."""
-        resp = requests.get(f"{BASE_URL}/v1/rules")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert all("config" in rule for rule in data)
+        assert response.status_code == 200
+        assert [rule["id"] for rule in response.json()] == [
+            "domain_allowlist",
+            "download_and_execute",
+            "secret_file_access",
+        ]
+
+    def test_includes_the_effective_configuration(self, client: TestClient) -> None:
+        """A reviewer can read the live thresholds without inspecting the
+        container's environment."""
+        rules = {rule["id"]: rule["config"] for rule in client.get("/v1/rules").json()}
+
+        assert rules["domain_allowlist"] == {"allowed_domains": ["github.com"]}
+        assert rules["download_and_execute"] == {}
+
+    def test_does_not_expose_the_database_url(self, client: TestClient) -> None:
+        """The endpoint is unauthenticated, so the whitelist has to hold."""
+        assert "database_url" not in client.get("/v1/rules").text
 
 
 class TestHealthz:
-    def test_reports_ok_when_the_database_responds(self) -> None:
-        resp = requests.get(f"{BASE_URL}/healthz")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data.get("status") == "ok"
+    def test_reports_ok_when_the_database_responds(self, client: TestClient) -> None:
+        response = client.get("/healthz")
 
-    def test_reports_poller_state(self) -> None:
-        resp = requests.get(f"{BASE_URL}/healthz")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "poller" in data
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        assert response.json()["database"] is True
 
-    def test_answers_503_when_the_database_is_down(self) -> None:
-        # This requires ability to simulate DB failure as above
-        try:
-            requests.get(f"{BASE_URL}/healthz", timeout=3)
-        except requests.exceptions.ConnectionError:
-            pytest.skip("Database is not running; unable to test 503 scenario")
-        else:
-            resp = requests.get(f"{BASE_URL}/healthz", headers={"X-Simulate-DB-Down": "1"})
-            assert resp.status_code == 503
+    def test_reports_poller_state(self, client: TestClient) -> None:
+        """The poller is off in tests, and health says so rather than lying."""
+        body = client.get("/healthz").json()
 
+        assert body["poller_running"] is False
+        assert body["last_run_at"] is None
+        assert body["consecutive_failures"] == 0
+        assert body["listener_connected"] is False
+        assert body["notify_wakeups"] == 0
 
-class TestPoller:
-    def test_runs_a_pass_on_its_interval(self) -> None:
-        # If we can set the poller to a short interval
-        sleep(2)  # Wait for a poller interval
-        # Check state endpoint
-        resp = requests.get(f"{BASE_URL}/v1/poller/state")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "last_pass" in data
+    def test_answers_503_when_the_database_is_down(self, client: TestClient) -> None:
+        """A structured 503, not a 500 with a stack trace."""
+        client.app.state.db.close()
 
-    def test_keeps_running_after_a_failed_pass(self) -> None:
-        # Simulate a bad event that will cause a poller pass to fail,
-        # then check that poller recovers
-        bad_event = {"event_type": "error_event", "details": {"cause": "fail"}}
-        requests.post(f"{BASE_URL}/v1/events", json=[bad_event])
-        sleep(2)
-        resp = requests.get(f"{BASE_URL}/v1/poller/state")
-        data = resp.json()
-        assert data["consecutive_failures"] >= 1 or data.get("last_failure") is not None
-        # Ensure it keeps running after failure
-        sleep(2)
-        resp2 = requests.get(f"{BASE_URL}/v1/poller/state")
-        assert resp2.status_code == 200
+        response = client.get("/healthz")
 
-    def test_counts_consecutive_failures_in_its_state(self) -> None:
-        # Cause several poller failures
-        for _ in range(2):
-            bad_event = {"event_type": "fail_event", "details": {"cause": "fail"}}
-            requests.post(f"{BASE_URL}/v1/events", json=[bad_event])
-            sleep(1)
-        resp = requests.get(f"{BASE_URL}/v1/poller/state")
-        data = resp.json()
-        assert data["consecutive_failures"] >= 2
-
-    def test_stops_cleanly_on_shutdown(self) -> None:
-        # This requires stopping the application; may not be feasible in integration context
-        # Instead, check that the shutdown endpoint triggers a clean stop
-        resp = requests.post(f"{BASE_URL}/v1/shutdown")
-        assert resp.status_code == 200 or resp.status_code == 202
-
-    def test_does_not_block_http_endpoints_during_a_pass(self) -> None:
-        """The reason the synchronous engine runs in a thread executor: a slow
-        pass must not stall /healthz."""
-        # Insert a long operation
-        resp = requests.post(f"{BASE_URL}/v1/events", json=[{"event_type": "slow_pass", "details": {"sleep": 3}}])
-        # Immediately call /healthz, it should answer quickly
-        resp2 = requests.get(f"{BASE_URL}/healthz", timeout=1)
-        assert resp2.status_code == 200
+        assert response.status_code == 503
+        assert response.json()["status"] == "degraded"
+        assert response.json()["database"] is False

@@ -9,241 +9,261 @@ Requires `docker compose up -d postgres`.
 
 from __future__ import annotations
 
-import os
-import time
-import pytest
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from datetime import timedelta
 from threading import Thread
+
+import psycopg
+import pytest
+from pycommon import AlertDraft, Database, Severity
+
+from analyser.engine import AnalysisEngine
+from tests.conftest import FIXED_NOW, BrokenRule, StubRule
+from tests.integration.conftest import (
+    read_alerts,
+    read_cursor,
+    seed_event,
+    seed_secret_read,
+    set_cursor,
+)
 
 pytestmark = pytest.mark.integration
 
-PG_DSN = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/postgres"
-)
-
-def get_conn():
-    return psycopg2.connect(PG_DSN)
-
-def clear_db():
-    with get_conn() as conn, conn.cursor() as cur:
-        # assumed table names and structure, adapt as needed
-        cur.execute("DELETE FROM alerts")
-        cur.execute("DELETE FROM events")
-        cur.execute("DELETE FROM analysis_cursor")
-
-def seed_event(occurred_at, ingest_seq, event_type='test', payload=None):
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO events (occurred_at, ingest_seq, type, payload) VALUES (%s, %s, %s, %s) RETURNING id",
-            (occurred_at, ingest_seq, event_type, payload)
-        )
-        return cur.fetchone()[0]
-
-def read_alerts():
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT * FROM alerts ORDER BY event_ingest_seq, rule")
-        return cur.fetchall()
-
-def read_cursor():
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT last_ingest_seq FROM analysis_cursor LIMIT 1")
-        row = cur.fetchone()
-        return row[0] if row else None
-
-def set_cursor(value):
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM analysis_cursor")
-        cur.execute("INSERT INTO analysis_cursor (last_ingest_seq) VALUES (%s)", (value,))
-
-def run_pipeline():
-    """Stub: Replace with call to your pipeline invocation code."""
-    # Example: analyser.pipeline.run_once()
-    from services.analyser.pipeline import run_once
-    return run_once()
 
 class TestRunOnce:
-    def setup_method(self):
-        clear_db()
+    def test_analyses_new_events_and_persists_alerts(
+        self, db: Database, engine: AnalysisEngine
+    ) -> None:
+        seed_secret_read(db, event_id="evt-1")
 
-    def test_analyses_new_events_and_persists_alerts(self) -> None:
-        """Seed a .env read, run once, assert one alerts row with the right
-        rule and severity."""
-        event_id = seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(0)
-        res = run_pipeline()
-        alerts = read_alerts()
-        assert len(alerts) == 1
-        alert = alerts[0]
-        assert alert["event_id"] == event_id
-        assert alert["rule"]  # replace with actual expected rule name
-        assert alert["severity"]  # replace with actual expected severity
+        report = engine.run_once()
 
-    def test_second_run_writes_nothing(self) -> None:
-        event_id = seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(0)
-        res1 = run_pipeline()
-        alerts1 = read_alerts()
-        rowcount1 = len(alerts1)
-        res2 = run_pipeline()
-        alerts2 = read_alerts()
-        assert len(alerts2) == rowcount1
+        alerts = read_alerts(db)
+        assert report.alerts_written == 1
+        assert [(alert.event_id, alert.rule) for alert in alerts] == [
+            ("evt-1", "secret_file_access")
+        ]
+        assert alerts[0].severity == Severity.HIGH
 
-    def test_advances_the_persisted_cursor(self) -> None:
-        seed_event("2022-01-01T00:00:00Z", 1)
-        seed_event("2022-01-01T01:00:00Z", 2)
-        set_cursor(0)
-        run_pipeline()
-        assert read_cursor() == 2
+    def test_second_run_writes_nothing(self, db: Database, engine: AnalysisEngine) -> None:
+        """The cursor has moved past the batch, so there is nothing to claim."""
+        seed_secret_read(db)
+        engine.run_once()
 
-    def test_leaves_the_cursor_unmoved_when_the_transaction_fails(self) -> None:
-        # Simulate a failing rule by injecting a failing rule into the pipeline, or violate constraint
-        # We'll insert a duplicate alert row if possible
-        seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(0)
-        # pre-set analysis_cursor
-        before = read_cursor()
-        # Simulate failure (suppose run_once will fail on an event with specific payload)
-        try:
-            from services.analyser.pipeline import BROKEN_RULE
-            BROKEN_RULE.enabled = True
-            with pytest.raises(Exception):
-                run_pipeline()
-        finally:
-            BROKEN_RULE.enabled = False
-        # No alert should land, cursor should be unmoved
-        assert read_cursor() == before
-        assert not read_alerts()
+        report = engine.run_once()
 
-    def test_picks_up_an_out_of_order_event(self) -> None:
-        # Seed two events, second has an earlier occurred_at but later ingest_seq
-        e1 = seed_event("2022-01-01T01:00:00Z", 1)
-        run_pipeline()
-        # Now insert out-of-order event
-        e2 = seed_event("2022-01-01T00:00:00Z", 2)
-        run_pipeline()
-        alerts = read_alerts()
-        assert {a["event_id"] for a in alerts} == {e1, e2}
+        assert report.events_examined == 0
+        assert len(read_alerts(db)) == 1
 
-    def test_processes_events_in_ingest_seq_order(self) -> None:
-        e1 = seed_event("2022-01-01T01:00:00Z", 1)
-        e2 = seed_event("2022-01-01T02:00:00Z", 2)
-        set_cursor(0)
-        run_pipeline()
-        alerts = read_alerts()
-        seqs = [a["event_ingest_seq"] for a in alerts]
-        assert seqs == sorted(seqs), "Should process by ingest_seq order"
+    def test_rewinding_the_cursor_does_not_duplicate_alerts(
+        self, db: Database, engine: AnalysisEngine
+    ) -> None:
+        """The (event_id, rule) constraint is what makes re-analysis safe."""
+        seed_secret_read(db)
+        engine.run_once()
+        set_cursor(db, 0)
 
-    def test_is_a_no_op_on_an_empty_table(self) -> None:
-        set_cursor(0)
-        run_pipeline()
-        alerts = read_alerts()
-        assert alerts == []
+        report = engine.run_once()
 
-    def test_writes_several_alerts_for_one_event(self) -> None:
-        # Event that matches multiple rules
-        e1 = seed_event("2022-01-01T01:00:00Z", 1, payload={"matches_two_rules": True})
-        set_cursor(0)
-        run_pipeline()
-        alerts = read_alerts()
-        assert len(alerts) >= 2
-        rules = {a["rule"] for a in alerts}
-        assert len(rules) >= 2
+        assert report.alerts_generated == 1
+        assert report.alerts_written == 0
+        assert len(read_alerts(db)) == 1
 
-    def test_survives_a_rule_that_raises(self) -> None:
-        # Insert event that will trigger both a broken rule and a good rule
-        e1 = seed_event("2022-01-01T00:00:00Z", 1, payload={"trip_broken_rule": True, "trip_good_rule": True})
-        set_cursor(0)
-        from services.analyser.pipeline import BROKEN_RULE
-        BROKEN_RULE.enabled = True
-        try:
-            run_pipeline()
-        finally:
-            BROKEN_RULE.enabled = False
-        alerts = read_alerts()
-        assert alerts  # At least the good rule's alert should be present
-        assert read_cursor() == 1
+    def test_advances_the_persisted_cursor(self, db: Database, engine: AnalysisEngine) -> None:
+        seed_secret_read(db, event_id="evt-1")
+        last_seq = seed_secret_read(db, event_id="evt-2")
+
+        engine.run_once()
+
+        assert read_cursor(db) == last_seq
+
+    def test_leaves_the_cursor_unmoved_when_the_transaction_fails(
+        self, db: Database, make_engine
+    ) -> None:
+        """Alert inserts and the cursor update share one transaction.
+
+        Forced with a draft referencing an event that does not exist, which the
+        alerts foreign key rejects.
+        """
+        seed_secret_read(db)
+        engine = make_engine(OrphanDraftRule())
+
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            engine.run_once()
+
+        assert read_cursor(db) == 0
+        assert read_alerts(db) == []
+
+    def test_picks_up_an_out_of_order_event(self, db: Database, engine: AnalysisEngine) -> None:
+        """A late event carries an old timestamp but a fresh ingest_seq."""
+        seed_secret_read(db, event_id="recent", occurred_at=FIXED_NOW)
+        engine.run_once()
+
+        seed_secret_read(db, event_id="late", occurred_at=FIXED_NOW - timedelta(days=1))
+        report = engine.run_once()
+
+        assert report.events_examined == 1
+        assert {alert.event_id for alert in read_alerts(db)} == {"recent", "late"}
+
+    def test_processes_events_in_ingest_seq_order(
+        self, db: Database, make_engine
+    ) -> None:
+        recorder = StubRule("recorder", fires=False)
+        seed_event(db, event_id="evt-1")
+        seed_event(db, event_id="evt-2")
+        seed_event(db, event_id="evt-3")
+
+        make_engine(recorder).run_once()
+
+        assert [event.event_id for event in recorder.seen] == ["evt-1", "evt-2", "evt-3"]
+
+    def test_is_a_no_op_on_an_empty_table(self, db: Database, engine: AnalysisEngine) -> None:
+        report = engine.run_once()
+
+        assert report.events_examined == 0
+        assert read_cursor(db) == 0
+
+    def test_writes_several_alerts_for_one_event(self, db: Database, make_engine) -> None:
+        seed_event(db, event_id="evt-1")
+
+        make_engine(StubRule("first"), StubRule("second")).run_once()
+
+        assert [alert.rule for alert in read_alerts(db)] == ["first", "second"]
+
+    def test_survives_a_rule_that_raises(self, db: Database, make_engine) -> None:
+        seed_secret_read(db)
+        engine = make_engine(BrokenRule(), StubRule("healthy"))
+
+        report = engine.run_once()
+
+        assert report.rule_failures == ["broken: boom"]
+        assert [alert.rule for alert in read_alerts(db)] == ["healthy"]
+        assert read_cursor(db) == 1
+
+    def test_claims_events_in_batches(self, db: Database, make_engine) -> None:
+        for seq in range(1, 6):
+            seed_secret_read(db, event_id=f"evt-{seq}")
+        engine = make_engine(batch_size=2)
+
+        first = engine.run_once()
+
+        assert first.events_examined == 2
+        assert first.has_more is True
+        assert read_cursor(db) == 2
+
 
 class TestConcurrency:
-    def setup_method(self):
-        clear_db()
+    def test_two_concurrent_runs_do_not_duplicate_alerts(
+        self, db: Database, make_engine
+    ) -> None:
+        """Both passes may claim the batch; the constraint keeps one alert."""
+        seed_secret_read(db)
+        engines = [make_engine(), make_engine()]
 
-    def test_two_concurrent_runs_do_not_duplicate_alerts(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(0)
-        # Launch two threads to simulate concurrent runs
-        results = []
-        def run():
-            try:
-                run_pipeline()
-            except Exception:
-                pass
-        t1 = Thread(target=run)
-        t2 = Thread(target=run)
-        t1.start(); t2.start()
-        t1.join(); t2.join()
-        alerts = read_alerts()
-        assert len(alerts) == 1
+        threads = [Thread(target=engine.run_once) for engine in engines]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(read_alerts(db)) == 1
+        assert read_cursor(db) == 1
+
 
 class TestBackfill:
-    def setup_method(self):
-        clear_db()
+    def test_reanalyses_all_history(self, db: Database, engine: AnalysisEngine) -> None:
+        seed_secret_read(db, event_id="evt-1")
+        seed_secret_read(db, event_id="evt-2")
 
-    def test_reanalyses_all_history(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        e2 = seed_event("2022-01-01T01:00:00Z", 2)
-        # Suppose there's a backfill method
-        from services.analyser.pipeline import backfill
-        backfill()
-        alerts = read_alerts()
-        event_ids = {a["event_id"] for a in alerts}
-        assert {e1, e2} <= event_ids
+        report = engine.backfill()
 
-    def test_repeat_backfill_writes_nothing(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        from services.analyser.pipeline import backfill
-        backfill()
-        n1 = len(read_alerts())
-        backfill()
-        n2 = len(read_alerts())
-        assert n1 == n2
+        assert report.alerts_written == 2
+        assert {alert.event_id for alert in read_alerts(db)} == {"evt-1", "evt-2"}
 
-    def test_leaves_the_cursor_untouched(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(7)
-        from services.analyser.pipeline import backfill
-        backfill()
-        assert read_cursor() == 7
+    def test_repeat_backfill_writes_nothing(self, db: Database, engine: AnalysisEngine) -> None:
+        seed_secret_read(db)
+        engine.backfill()
 
-    def test_since_filter_limits_the_range(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        e2 = seed_event("2022-01-01T01:00:00Z", 2)
-        from services.analyser.pipeline import backfill
-        backfill(since_ingest_seq=2)
-        alerts = read_alerts()
-        event_ids = {a["event_id"] for a in alerts}
-        assert e2 in event_ids and e1 not in event_ids
+        report = engine.backfill()
+
+        assert report.alerts_generated == 1
+        assert report.alerts_written == 0
+
+    def test_leaves_the_cursor_untouched(self, db: Database, engine: AnalysisEngine) -> None:
+        """A backfill that moved the cursor would make the poller skip events."""
+        seed_secret_read(db)
+        set_cursor(db, 7)
+
+        engine.backfill()
+
+        assert read_cursor(db) == 7
+
+    def test_since_filter_limits_the_range(self, db: Database, engine: AnalysisEngine) -> None:
+        seed_secret_read(db, event_id="old", occurred_at=FIXED_NOW - timedelta(days=2))
+        seed_secret_read(db, event_id="recent", occurred_at=FIXED_NOW)
+
+        engine.backfill(since=FIXED_NOW - timedelta(hours=1))
+
+        assert [alert.event_id for alert in read_alerts(db)] == ["recent"]
+
+    def test_writes_only_findings_from_a_newly_added_rule(
+        self, db: Database, make_engine
+    ) -> None:
+        seed_secret_read(db)
+        make_engine(StubRule("old")).backfill()
+
+        report = make_engine(StubRule("old"), StubRule("new")).backfill()
+
+        assert report.alerts_written == 1
+        assert [alert.rule for alert in read_alerts(db)] == ["new", "old"]
+
+    def test_pages_through_history_beyond_one_batch(
+        self, db: Database, make_engine
+    ) -> None:
+        for seq in range(1, 6):
+            seed_secret_read(db, event_id=f"evt-{seq}")
+
+        report = make_engine(batch_size=2).backfill()
+
+        assert report.events_examined == 5
+        assert report.alerts_written == 5
+
 
 class TestForeignKeys:
-    def setup_method(self):
-        clear_db()
-
-    def test_alert_insert_fails_for_an_unknown_event(self) -> None:
+    def test_alert_insert_fails_for_an_unknown_event(self, db: Database) -> None:
         """The FK is what keeps orphaned alerts out of the timeline."""
-        with get_conn() as conn, conn.cursor() as cur:
-            with pytest.raises(psycopg2.IntegrityError):
-                cur.execute(
-                    "INSERT INTO alerts (event_id, rule, severity, event_ingest_seq) VALUES (%s, %s, %s, %s)",
-                    (9999, 'rule1', 'high', 1)
-                )
-                conn.commit()
+        with pytest.raises(psycopg.errors.ForeignKeyViolation), db.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO alerts (event_id, agent_id, rule, severity, summary)
+                VALUES ('no-such-event', 'agent-alpha', 'rule', 'high', 'orphan')
+                """
+            )
 
-    def test_deleting_an_event_cascades_to_its_alerts(self) -> None:
-        e1 = seed_event("2022-01-01T00:00:00Z", 1)
-        set_cursor(0)
-        run_pipeline()
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM events WHERE id = %s", (e1,))
-        alerts = read_alerts()
-        assert len(alerts) == 0
+    def test_deleting_an_event_cascades_to_its_alerts(
+        self, db: Database, engine: AnalysisEngine
+    ) -> None:
+        seed_secret_read(db, event_id="evt-1")
+        engine.run_once()
+
+        with db.transaction() as cur:
+            cur.execute("DELETE FROM events WHERE event_id = 'evt-1'")
+
+        assert read_alerts(db) == []
+
+
+class OrphanDraftRule:
+    """Emits a draft for an event that does not exist, to fail the insert."""
+
+    id = "orphan"
+    description = "test double"
+
+    def evaluate(self, event, config) -> list[AlertDraft]:
+        return [
+            AlertDraft(
+                event_id="no-such-event",
+                agent_id=event.agent_id,
+                rule=self.id,
+                severity=Severity.LOW,
+                summary="orphan",
+            )
+        ]
