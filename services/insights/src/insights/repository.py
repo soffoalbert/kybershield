@@ -12,7 +12,7 @@ from typing import Protocol
 
 from pycommon import Database, Severity
 
-from insights.models import AgentSummary, AlertListItem, TimelineItem
+from insights.models import AgentSummary, AlertListItem, RuleCount, TimelineItem
 
 #: Alerts in a window with optional filters.
 #:
@@ -156,7 +156,9 @@ class InsightsRepository(Protocol):
         """Return one page of alerts and the total matching count."""
         ...
 
-    def agent_summary(self, agent_id: str, start: datetime, end: datetime) -> AgentSummary:
+    def agent_summary(
+        self, agent_id: str, start: datetime, end: datetime, top_rules_limit: int
+    ) -> AgentSummary:
         """Return aggregate risk posture for one agent."""
         ...
 
@@ -198,35 +200,34 @@ class PgInsightsRepository:
             "until": until,
             "agent_id": agent_id,
             "rule": rule,
-            "severity_min": severity_min,
-            "limit": limit,
-            "offset": offset,
+            "severity_min": severity_min.value if severity_min else None,
         }
 
-        rows = self._db.query(LIST_ALERTS_SQL, params)
+        with self._db.connection() as conn:
+            rows = conn.execute(
+                LIST_ALERTS_SQL, {**params, "limit": limit, "offset": offset}
+            ).fetchall()
+            count_row = conn.execute(COUNT_ALERTS_SQL, params).fetchone()
+
         alert_list = [
             AlertListItem(
-                alert_id=row["alert_id"],
+                alert_id=str(row["alert_id"]),
                 agent_id=row["agent_id"],
                 event_id=row["event_id"],
-                created_at=row["created_at"],
+                timestamp=row["created_at"],
                 rule=row["rule"],
                 severity=row["severity"],
                 summary=row["summary"],
             )
             for row in rows
         ]
-
-        count_params = {
-            key: params[key]
-            for key in ["since", "until", "agent_id", "rule", "severity_min"]
-        }
-        count_row = self._db.query_one(COUNT_ALERTS_SQL, count_params)
         total = count_row["total"] if count_row else 0
 
         return alert_list, total
 
-    def agent_summary(self, agent_id: str, start: datetime, end: datetime) -> AgentSummary:
+    def agent_summary(
+        self, agent_id: str, start: datetime, end: datetime, top_rules_limit: int = 5
+    ) -> AgentSummary:
         """Assemble a summary from the aggregate, top-rules, and event-count queries.
 
         An agent with no alerts in the window returns a populated summary with
@@ -236,34 +237,27 @@ class PgInsightsRepository:
         params = {
             "agent_id": agent_id,
             "start": start,
-            "end": end
+            "end": end,
         }
 
-        # Aggregate alerts by severity for the agent
-        agg_row = self._db.query_one(AGENT_SUMMARY_SQL, params)
-        total_alerts = agg_row["total_alerts"] if agg_row and "total_alerts" in agg_row else 0
-        max_severity = agg_row["max_severity"] if agg_row else None
-        severity_counts = agg_row["severity_counts"] if agg_row else {}
-
-        # Get total events for the period
-        event_count_row = self._db.query_one(COUNT_EVENTS_SQL, params)
-        total_events = event_count_row["total_events"] if event_count_row and "total_events" in event_count_row else 0
-
-        # Get top rules for the period (limit 3, for example)
-        top_rules_params = dict(params)
-        top_rules_params["limit"] = 3
-        top_rules_rows = self._db.query(TOP_RULES_SQL, top_rules_params)
-        top_rules = [
-            {"rule": row["rule"], "count": row["count"]}
-            for row in top_rules_rows
-        ]
+        with self._db.connection() as conn:
+            agg_row = conn.execute(AGENT_SUMMARY_SQL, params).fetchone()
+            event_count_row = conn.execute(COUNT_EVENTS_SQL, params).fetchone()
+            top_rules_rows = conn.execute(
+                TOP_RULES_SQL, {**params, "limit": top_rules_limit}
+            ).fetchall()
 
         return AgentSummary(
-            total_alerts=total_alerts,
-            max_severity=max_severity,
-            severity_counts=severity_counts,
-            total_events=total_events,
-            top_rules=top_rules,
+            agent_id=agent_id,
+            window_start=start,
+            window_end=end,
+            total_alerts=agg_row["total_alerts"] if agg_row else 0,
+            max_severity=agg_row["max_severity"] if agg_row else None,
+            severity_counts=agg_row["severity_counts"] if agg_row else {},
+            total_events=event_count_row["total_events"] if event_count_row else 0,
+            top_rules=[
+                RuleCount(rule=row["rule"], count=row["count"]) for row in top_rules_rows
+            ],
         )
 
     def agent_timeline(
@@ -276,10 +270,11 @@ class PgInsightsRepository:
             "end": end,
             "limit": limit,
         }
-        rows = self._db.query(AGENT_TIMELINE_SQL, params)
+        with self._db.connection() as conn:
+            rows = conn.execute(AGENT_TIMELINE_SQL, params).fetchall()
         timeline = [
             TimelineItem(
-                ts=row["ts"],
+                timestamp=row["ts"],
                 kind=row["kind"],
                 reference_id=row["reference_id"],
                 brief=row["brief"],
@@ -292,9 +287,4 @@ class PgInsightsRepository:
 
     def healthy(self) -> bool:
         """Delegate to the database health probe."""
-        try:
-            # Simple health check
-            self._db.query_one("SELECT 1", {})
-            return True
-        except Exception:
-            return False
+        return self._db.healthy()
