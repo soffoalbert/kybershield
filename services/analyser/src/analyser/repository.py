@@ -76,6 +76,18 @@ class AnalysisRepository(Protocol):
         """
         ...
 
+    def process_batch_atomically(
+        self, events: Sequence[Event], drafts: Sequence[AlertDraft], new_cursor: int
+    ) -> int:
+        """Write alerts and advance the cursor in one transaction.
+
+        On the protocol because :meth:`AnalysisEngine.run_once` depends on the
+        atomicity, so a fake that skips it is not a valid substitute.
+
+        @returns The number of alerts written.
+        """
+        ...
+
 
 class PgAnalysisRepository:
     """PostgreSQL implementation of :class:`AnalysisRepository`."""
