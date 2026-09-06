@@ -21,19 +21,30 @@ export class FakeEventRepository implements EventRepository {
   healthy = true;
 
   async insertIfAbsent(event: AgentEvent): Promise<IngestResult> {
-    throw new Error('TODO: implement FakeEventRepository.insertIfAbsent');
+    if (this.failWith) throw this.failWith;
+    if (this.events.has(event.eventId)) {
+      return { eventId: event.eventId, status: 'duplicate' };
+    }
+    this.events.set(event.eventId, event);
+    return { eventId: event.eventId, status: 'created' };
   }
 
   async insertBatchIfAbsent(events: AgentEvent[]): Promise<IngestResult[]> {
-    throw new Error('TODO: implement FakeEventRepository.insertBatchIfAbsent');
+    if (this.failWith) throw this.failWith;
+    return Promise.all(events.map(ev => this.insertIfAbsent(ev)));
   }
 
   async upsertAgentSeen(agentId: string, seenAt: Date): Promise<void> {
-    throw new Error('TODO: implement FakeEventRepository.upsertAgentSeen');
+    if (this.failWith) throw this.failWith;
+    const currentSeen = this.agentsSeen.get(agentId);
+    if (!currentSeen || seenAt > currentSeen) {
+      this.agentsSeen.set(agentId, seenAt);
+    }
   }
 
   async healthCheck(): Promise<boolean> {
-    throw new Error('TODO: implement FakeEventRepository.healthCheck');
+    if (this.failWith) throw this.failWith;
+    return this.healthy;
   }
 }
 
@@ -42,7 +53,11 @@ export class FakeApiKeyStore implements ApiKeyStore {
   constructor(private readonly keys: Map<string, string> = new Map([['test-key', 'test-client']])) {}
 
   resolve(presentedKey: string): ClientIdentity | null {
-    throw new Error('TODO: implement FakeApiKeyStore.resolve');
+    const client = this.keys.get(presentedKey);
+    if (client) {
+      return { clientId: client };
+    }
+    return null;
   }
 }
 
@@ -51,12 +66,12 @@ export class FixedClock implements Clock {
   constructor(private current: Date = new Date('2026-08-25T12:00:00Z')) {}
 
   now(): Date {
-    throw new Error('TODO: implement FixedClock.now');
+    return new Date(this.current);
   }
 
   /** Move the clock forward, for window-sensitive assertions. */
   advance(ms: number): void {
-    throw new Error('TODO: implement FixedClock.advance');
+    this.current = new Date(this.current.getTime() + ms);
   }
 }
 
@@ -67,7 +82,14 @@ export class FixedClock implements Clock {
  * valid body each time.
  */
 export function buildEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  throw new Error('TODO: implement buildEnvelope');
+  return {
+    id: 'evt_123',
+    agent_id: 'agent_abc',
+    received_at: '2026-08-25T12:00:00Z',
+    type: 'test.type',
+    body: { foo: 'bar' },
+    ...overrides,
+  };
 }
 
 /** Build a test app with fakes wired in. */
@@ -80,5 +102,22 @@ export function buildTestApp(overrides?: {
   app: import('fastify').FastifyInstance;
   repository: FakeEventRepository;
 } {
-  throw new Error('TODO: implement buildTestApp');
+  // Require real application only at runtime in tests to avoid breaking build
+  const Fastify = require('fastify');
+  const { buildApp } = require('../../src/app.js');
+
+  const repository = (overrides?.repository as FakeEventRepository) || new FakeEventRepository();
+  const apiKeyStore = overrides?.apiKeyStore || new FakeApiKeyStore();
+  const clock = overrides?.clock || new FixedClock();
+  const bodyLimitBytes = overrides?.bodyLimitBytes || 1024 * 1024;
+
+  const app = buildApp({
+    repository,
+    apiKeyStore,
+    clock,
+    bodyLimitBytes,
+    fastifyFactory: () => Fastify(),
+  });
+
+  return { app, repository };
 }

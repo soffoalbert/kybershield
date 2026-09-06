@@ -148,13 +148,16 @@ export class PgEventRepository implements EventRepository {
    * @throws {StorageError} On any driver error.
    */
   async upsertAgentSeen(agentId: string, seenAt: Date): Promise<void> {
-    const client = await this.pool.connect();
+    let client;
     try {
+      // Inside the try, so a failure to acquire a client surfaces as a
+      // StorageError like every other driver failure on this port.
+      client = await this.pool.connect();
       await client.query(UPSERT_AGENT_SQL, [agentId, seenAt]);
     } catch (error) {
       throw new StorageError('Failed to upsert agent seen', error);
     } finally {
-      client.release();
+      client?.release();
     }
   }
 
@@ -164,14 +167,17 @@ export class PgEventRepository implements EventRepository {
    * Never throws; a connection failure resolves to `false`.
    */
   async healthCheck(): Promise<boolean> {
-    const client = await this.pool.connect();
+    let client;
     try {
+      // Inside the try: acquiring the client is itself a connection attempt,
+      // and it throws on an exhausted or closed pool.
+      client = await this.pool.connect();
       await client.query('SELECT 1');
       return true;
-    } catch (error) {
+    } catch {
       return false;
     } finally {
-      client.release();
+      client?.release();
     }
   }
 }
