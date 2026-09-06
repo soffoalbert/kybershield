@@ -21,5 +21,11 @@ export interface HealthRoutesOptions {
  * `503 {status:"degraded", database:false}`.
  */
 export const healthRoutes: FastifyPluginAsync<HealthRoutesOptions> = async (app, opts) => {
-  throw new Error('TODO: implement healthRoutes');
+  app.get('/healthz', async (request, reply) => {
+    reply.code(200).send({ status: 'ok' });
+  });
+  app.get('/readyz', async (_, reply) => {
+    const isReady = await opts.repository.healthCheck();
+    reply.code(isReady ? 200 : 503).send({ status: isReady ? 'ready' : 'degraded', database: isReady });
+  });  
 };

@@ -3,12 +3,16 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify';
-import type { Clock, EventRepository } from '../domain/ports.js';
+import type { ApiKeyStore, Clock, EventRepository } from '../domain/ports.js';
+import type { AgentEvent } from '../domain/types.js';
+import { requireApiKey } from '../plugins/auth.js';
 
 export interface EventRoutesOptions {
   repository: EventRepository;
   clock: Clock;
   maxBatchSize: number;
+  /** Bound into the per-route `requireApiKey` preHandler below. */
+  apiKeyStore: ApiKeyStore;
 }
 
 /**
@@ -39,5 +43,24 @@ export interface EventRoutesOptions {
  *   `events`, or over the size limit).
  */
 export const eventRoutes: FastifyPluginAsync<EventRoutesOptions> = async (app, opts) => {
-  throw new Error('TODO: implement eventRoutes');
+  app.post('/v1/events', { preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })] }, async (request, reply) => {
+    const client = request.client;
+    if (!client) {
+      reply.code(401).send({ error: 'unauthorized' });
+      return;
+    }
+    const event = request.body as AgentEvent;
+    const result = await opts.repository.insertIfAbsent(event);
+    reply.code(result.status === 'created' ? 201 : 200).send({ eventId: result.eventId, status: result.status });
+  });
+  app.post('/v1/events:batch', { preHandler: [requireApiKey.bind({ apiKeyStore: opts.apiKeyStore })] }, async (request, reply) => {
+    const client = request.client;
+    if (!client) {
+      reply.code(401).send({ error: 'unauthorized' });
+      return;
+    }
+    const events = request.body as AgentEvent[];
+    const results = await opts.repository.insertBatchIfAbsent(events);
+    reply.code(207).send({ results: results.map(result => ({ eventId: result.eventId, status: result.status })) });
+  });
 };

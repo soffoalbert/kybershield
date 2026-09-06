@@ -8,6 +8,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApiKeyStore } from '../domain/ports.js';
 import type { ClientIdentity } from '../domain/types.js';
+import { extractBearerToken } from '../auth/apiKeyStore.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -27,7 +28,8 @@ export interface AuthPluginOptions {
  * decorator is scoped to the routes that register this plugin.
  */
 export const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (app, opts) => {
-  throw new Error('TODO: implement authPlugin');
+  app.decorateRequest('client', undefined);
+  app.addHook('preHandler', requireApiKey.bind({ apiKeyStore: opts.apiKeyStore }));
 };
 
 /**
@@ -45,5 +47,15 @@ export async function requireApiKey(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  throw new Error('TODO: implement requireApiKey');
+  const presentedKey = extractBearerToken(request.headers['authorization'] as string | undefined);
+  if (!presentedKey) {
+    reply.code(401).send({ error: 'unauthorized' });
+    return;
+  }
+  const client = this.apiKeyStore.resolve(presentedKey);
+  if (!client) {
+    reply.code(401).send({ error: 'unauthorized' });
+    return;
+  }
+  request.client = client;
 }

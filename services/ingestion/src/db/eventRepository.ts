@@ -58,7 +58,16 @@ export class PgEventRepository implements EventRepository {
    *   attached as `cause` for logging.
    */
   async insertIfAbsent(event: AgentEvent): Promise<IngestResult> {
-    throw new Error('TODO: implement PgEventRepository.insertIfAbsent');
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(INSERT_EVENT_SQL, [event.eventId, event.agentId, event.occurredAt, event.type, event.payload, event.raw, event.tags, event.clientId]);
+      // RETURNING yields no rows when ON CONFLICT DO NOTHING skipped the insert.
+      return { eventId: event.eventId, status: result.rowCount === 1 ? 'created' : 'duplicate' };
+    } catch (error) {
+      throw new Error(`Failed to insert event: ${error}`);
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -73,7 +82,48 @@ export class PgEventRepository implements EventRepository {
    * @throws {StorageError} If the transaction fails; nothing is persisted.
    */
   async insertBatchIfAbsent(events: AgentEvent[]): Promise<IngestResult[]> {
-    throw new Error('TODO: implement PgEventRepository.insertBatchIfAbsent');
+    if (events.length === 0) {
+      return [];
+    }
+
+    // ON CONFLICT cannot resolve two conflicting rows inside one statement, so
+    // within-batch repeats are collapsed before anything reaches the database.
+    const firstOccurrence = new Map<string, AgentEvent>();
+    for (const event of events) {
+      if (!firstOccurrence.has(event.eventId)) {
+        firstOccurrence.set(event.eventId, event);
+      }
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const created = new Set<string>();
+      for (const event of firstOccurrence.values()) {
+        const result = await client.query(INSERT_EVENT_SQL, [event.eventId, event.agentId, event.occurredAt, event.type, event.payload, event.raw, event.tags, event.clientId]);
+        if (result.rowCount === 1) {
+          created.add(event.eventId);
+        }
+      }
+      await client.query('COMMIT');
+
+      // One result per input event, in input order. A repeat inside the batch
+      // reports `duplicate` even though its first occurrence was created.
+      const seen = new Set<string>();
+      return events.map((event) => {
+        const isRepeat = seen.has(event.eventId);
+        seen.add(event.eventId);
+        return {
+          eventId: event.eventId,
+          status: !isRepeat && created.has(event.eventId) ? 'created' : 'duplicate',
+        };
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw new Error(`Failed to insert events: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -82,7 +132,14 @@ export class PgEventRepository implements EventRepository {
    * @throws {StorageError} On any driver error.
    */
   async upsertAgentSeen(agentId: string, seenAt: Date): Promise<void> {
-    throw new Error('TODO: implement PgEventRepository.upsertAgentSeen');
+    const client = await this.pool.connect();
+    try {
+      await client.query(UPSERT_AGENT_SQL, [agentId, seenAt]);
+    } catch (error) {
+      throw new Error(`Failed to upsert agent seen: ${error}`);
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -91,6 +148,15 @@ export class PgEventRepository implements EventRepository {
    * Never throws; a connection failure resolves to `false`.
    */
   async healthCheck(): Promise<boolean> {
-    throw new Error('TODO: implement PgEventRepository.healthCheck');
+    const client = await this.pool.connect();
+    try {
+      await client.query('SELECT 1');
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      client.release();
+    }
+    return false;
   }
 }
