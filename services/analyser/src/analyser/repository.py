@@ -7,9 +7,10 @@ while the Postgres implementation is covered by integration tests.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta
-from typing import Protocol
+from datetime import datetime
+from typing import Any, Protocol
 
+from psycopg.types.json import Jsonb
 from pycommon import AlertDraft, Database, Event
 
 #: Claim the next batch of events by arrival order.
@@ -27,6 +28,18 @@ FETCH_BATCH_SQL = """
      LIMIT %(limit)s
 """
 
+#: Backfill page. Filtered on `occurred_at` rather than `ingest_seq` because a
+#: backfill is expressed in wall-clock terms ("re-check the last week"), and
+#: ordered so LIMIT/OFFSET paging is stable across calls.
+FETCH_BATCH_SINCE_SQL = """
+    SELECT event_id, ingest_seq, agent_id, occurred_at, received_at,
+           type, payload, raw, tags, client_id
+      FROM events
+     WHERE (%(since)s::timestamptz IS NULL OR occurred_at >= %(since)s)
+     ORDER BY ingest_seq
+     LIMIT %(limit)s OFFSET %(offset)s
+"""
+
 #: Insert alerts, skipping any that already exist for this (event, rule) pair.
 #: This is what makes re-analysis and backfill safe to run repeatedly.
 INSERT_ALERTS_SQL = """
@@ -35,6 +48,36 @@ INSERT_ALERTS_SQL = """
     ON CONFLICT (event_id, rule) DO NOTHING
     RETURNING alert_id
 """
+
+#: Single-row watermark table, seeded by the migration, so this always matches.
+SELECT_CURSOR_SQL = "SELECT last_ingest_seq FROM analysis_cursor WHERE id = 1"
+
+#: Upsert rather than UPDATE so a truncated cursor table heals itself instead
+#: of silently never advancing.
+UPSERT_CURSOR_SQL = """
+    INSERT INTO analysis_cursor (id, last_ingest_seq, updated_at)
+    VALUES (1, %(seq)s, now())
+    ON CONFLICT (id) DO UPDATE
+        SET last_ingest_seq = EXCLUDED.last_ingest_seq,
+            updated_at      = EXCLUDED.updated_at
+"""
+
+
+def _alert_params(draft: AlertDraft) -> dict[str, Any]:
+    """Bind one draft for :data:`INSERT_ALERTS_SQL`.
+
+    `severity` goes as its plain string value for Postgres to cast to the enum,
+    and `details` is wrapped in `Jsonb` so psycopg adapts the dict rather than
+    rejecting it.
+    """
+    return {
+        "event_id": draft.event_id,
+        "agent_id": draft.agent_id,
+        "rule": draft.rule,
+        "severity": draft.severity.value,
+        "summary": draft.summary,
+        "details": Jsonb(draft.details) if draft.details is not None else None,
+    }
 
 
 class AnalysisRepository(Protocol):
@@ -94,44 +137,52 @@ class PgAnalysisRepository:
 
     def __init__(self, db: Database) -> None:
         self.db = db
+
     def fetch_batch_after(self, cursor: int, limit: int) -> list[Event]:
         """Run :data:`FETCH_BATCH_SQL` and map rows to Events."""
         with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(FETCH_BATCH_SQL, {"cursor": cursor, "limit": limit})
-                return [Event(**row) for row in cursor.fetchall()]
+            rows = conn.execute(FETCH_BATCH_SQL, {"cursor": cursor, "limit": limit}).fetchall()
+        return [Event(**row) for row in rows]
 
     def fetch_batch_since(self, since: datetime | None, limit: int, offset: int) -> list[Event]:
         """Page through history by `occurred_at` for a backfill."""
+        params = {"since": since, "limit": limit, "offset": offset}
         with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(FETCH_BATCH_SINCE_SQL, {"since": since, "limit": limit, "offset": offset})
-                return [Event(**row) for row in cursor.fetchall()]
+            rows = conn.execute(FETCH_BATCH_SINCE_SQL, params).fetchall()
+        return [Event(**row) for row in rows]
 
     def insert_alerts_ignore_dupes(self, drafts: Sequence[AlertDraft]) -> int:
         """Insert all drafts in one transaction, counting returned ids.
 
         `details` is serialised to JSON; `severity` is passed as its string
         value so Postgres casts it to the enum.
+
+        Counted from the rows RETURNING gives back rather than from `rowcount`:
+        a draft skipped by ON CONFLICT returns nothing, which is exactly the
+        "already known finding" case the count must exclude.
         """
-        with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(INSERT_ALERTS_SQL, {"drafts": drafts})
-                return cursor.rowcount
+        if not drafts:
+            return 0
+        written = 0
+        with self.db.transaction() as cur:
+            for draft in drafts:
+                cur.execute(INSERT_ALERTS_SQL, _alert_params(draft))
+                if cur.fetchone() is not None:
+                    written += 1
+        return written
 
     def get_cursor(self) -> int:
         """Read `analysis_cursor.last_ingest_seq`."""
         with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT last_ingest_seq FROM analysis_cursor")
-                return cursor.fetchone()[0]
+            row = conn.execute(SELECT_CURSOR_SQL).fetchone()
+        # The migration seeds the row, so None means someone truncated the
+        # table. Starting from 0 re-analyses history, which dedupe absorbs.
+        return row["last_ingest_seq"] if row else 0
 
     def set_cursor(self, seq: int) -> None:
         """Write `analysis_cursor.last_ingest_seq` and bump `updated_at`."""
-        with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE analysis_cursor SET last_ingest_seq = %s, updated_at = NOW()", (seq,))
-                conn.commit()
+        with self.db.transaction() as cur:
+            cur.execute(UPSERT_CURSOR_SQL, {"seq": seq})
 
     def process_batch_atomically(
         self, events: Sequence[Event], drafts: Sequence[AlertDraft], new_cursor: int
@@ -143,10 +194,19 @@ class PgAnalysisRepository:
         process dies after commit, the alert unique constraint absorbs any
         replay.
 
+        `events` is unused: it is in the signature so an implementation that
+        needs the batch (to stamp provenance, say) does not change the port.
+
         @returns The number of alerts written.
         """
-        with self.db.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("INSERT INTO alerts (event_id, agent_id, rule, severity, summary, details) VALUES (%s, %s, %s, %s, %s, %s)", (events, drafts, new_cursor))
-                conn.commit()
-                return cursor.rowcount
+        written = 0
+        # One transaction spanning both writes. This is the whole point of the
+        # method: separate commits would let a crash advance the cursor past
+        # events whose alerts were never stored.
+        with self.db.transaction() as cur:
+            for draft in drafts:
+                cur.execute(INSERT_ALERTS_SQL, _alert_params(draft))
+                if cur.fetchone() is not None:
+                    written += 1
+            cur.execute(UPSERT_CURSOR_SQL, {"seq": new_cursor})
+        return written

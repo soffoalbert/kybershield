@@ -8,10 +8,11 @@ code change. The engine passes it to every rule's `evaluate`.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from pycommon import BaseServiceSettings
 from pydantic import field_validator
+from pydantic_settings import NoDecode
 
 
 class AnalyserConfig(BaseServiceSettings):
@@ -38,12 +39,17 @@ class AnalyserConfig(BaseServiceSettings):
     listen_enabled: bool = True
     listen_reconnect_seconds: float = 5.0
 
+    # `NoDecode` on both list fields below: without it pydantic-settings runs
+    # `json.loads` on the raw env value inside its env source, which fails on
+    # `a.com,b.com` before any validator gets a chance to split it. NoDecode
+    # hands the string through untouched so `_split_csv` can do the work.
+
     # --- domain_allowlist rule ---
-    allowed_domains: list[str] = []
+    allowed_domains: Annotated[list[str], NoDecode] = []
 
     # --- secret_file_access rule ---
     # Case-insensitive substrings matched against the file path.
-    secret_path_patterns: list[str] = [
+    secret_path_patterns: Annotated[list[str], NoDecode] = [
         ".env",
         "id_rsa",
         ".aws/credentials",
@@ -58,11 +64,15 @@ class AnalyserConfig(BaseServiceSettings):
     def _split_csv(cls, value: object) -> object:
         """Accept a comma-separated string for list fields.
 
-        docker-compose passes `ALLOWED_DOMAINS=a.com,b.com`; pydantic would
-        otherwise try to parse that as JSON and fail.
+        docker-compose passes `ALLOWED_DOMAINS=a.com,b.com`. Reachable only
+        because the field is annotated `NoDecode`; otherwise the env source
+        would have already failed trying to JSON-decode the value.
+
+        Entries are stripped and blanks dropped, so `a.com, b.com` and a
+        trailing comma both behave.
         """
         if isinstance(value, str):
-            return value.split(",")
+            return [entry.strip() for entry in value.split(",") if entry.strip()]
         return value
 
 
