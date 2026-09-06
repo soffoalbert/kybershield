@@ -12,6 +12,7 @@ import type { AppConfig } from './config/env.js';
 import type { ApiKeyStore, EventRepository } from './domain/ports.js';
 import { StorageError } from './domain/types.js';
 import { registerDocs } from './plugins/docs.js';
+import { replyValidationFailed } from './replies.js';
 import { eventRoutes } from './routes/events.js';
 import { healthRoutes } from './routes/health.js';
 
@@ -107,7 +108,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         message: entry.message ?? 'invalid',
       }));
       request.log.warn({ issues }, 'request failed schema validation');
-      reply.code(400).send({ error: 'validation_failed', issues });
+      replyValidationFailed(reply, issues);
       return;
     }
 
@@ -119,7 +120,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         message: issue.message,
       }));
       request.log.warn({ issues }, 'request failed validation');
-      reply.code(400).send({ error: 'validation_failed', issues });
+      replyValidationFailed(reply, issues);
       return;
     }
 
