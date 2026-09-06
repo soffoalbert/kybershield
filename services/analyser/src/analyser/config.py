@@ -48,7 +48,9 @@ class AnalyserConfig(BaseServiceSettings):
         docker-compose passes `ALLOWED_DOMAINS=a.com,b.com`; pydantic would
         otherwise try to parse that as JSON and fail.
         """
-        raise NotImplementedError
+        if isinstance(value, str):
+            return value.split(",")
+        return value
 
 
 @lru_cache(maxsize=1)
@@ -57,4 +59,4 @@ def get_config() -> AnalyserConfig:
 
     Cached so FastAPI dependencies and the CLI observe the same instance.
     """
-    raise NotImplementedError
+    return AnalyserConfig(**os.environ)

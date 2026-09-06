@@ -28,8 +28,12 @@ def run_once(
     Prints a summary of the run. Exits non-zero if any rule raised, so a cron
     wrapper can alert on a broken detection instead of failing silently.
     """
-    raise NotImplementedError
-
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    report = engine.run_once(batch_size)
+    print(report)
+    if report.rule_failures:
+        raise typer.Exit(1)
 
 @app.command("backfill")
 def backfill(
@@ -41,19 +45,26 @@ def backfill(
     existing findings are skipped, so this is safe to run repeatedly. Use it
     after adding or retuning a rule.
     """
-    raise NotImplementedError
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    report = engine.backfill(since)
+    print(report)
 
 
 @app.command("list-rules")
 def list_rules() -> None:
     """Print the registered rules with their effective configuration."""
-    raise NotImplementedError
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    print(engine.rules)
 
 
 @app.command("show-cursor")
 def show_cursor() -> None:
     """Print the current watermark and how many events sit beyond it."""
-    raise NotImplementedError
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    print(engine.repo.get_cursor())
 
 
 if __name__ == "__main__":

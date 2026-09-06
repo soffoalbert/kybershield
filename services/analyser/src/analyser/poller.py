@@ -36,15 +36,29 @@ class Poller:
         interval_seconds: float,
         state: PollerState | None = None,
     ) -> None:
-        raise NotImplementedError
+        self.engine = engine
+        self.interval_seconds = interval_seconds
+        self.state = state or PollerState()
 
     async def start(self) -> None:
         """Launch the loop as an asyncio task. Idempotent."""
-        raise NotImplementedError
+        if self.state.running:
+            return
+        self.state.running = True
+        self.state.total_runs += 1
+        self.state.last_run_at = datetime.now()
+        self.task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
         """Cancel the task and wait for it to unwind. Idempotent."""
-        raise NotImplementedError
+        if not self.state.running:
+            return
+        self.state.running = False
+        self.task.cancel()
+        try:
+            await self.task
+        except asyncio.CancelledError:
+            pass
 
     async def _loop(self) -> None:
         """Run passes until cancelled.
@@ -57,7 +71,15 @@ class Poller:
         Backs off up to a ceiling after consecutive failures, so a database
         outage does not turn into a tight reconnect loop.
         """
-        raise NotImplementedError
+        while self.state.running:
+            try:
+                report = await asyncio.to_thread(self.engine.run_once)
+                self.state.last_report = report
+                self.state.consecutive_failures = 0
+                self.state.recent_errors = []
+            except Exception as exc:  # noqa: BLE001 - isolation is the point
+                self.state.consecutive_failures += 1
+                self.state.recent_errors.append(str(exc))
 
     async def run_pass(self) -> RunReport:
         """Execute one drain in a thread executor.
@@ -66,4 +88,4 @@ class Poller:
         the event loop and stall the HTTP endpoints, so it goes through
         `asyncio.to_thread`.
         """
-        raise NotImplementedError
+        return await asyncio.to_thread(self.engine.run_once)

@@ -66,7 +66,18 @@ async def lifespan(app: FastAPI):
     is how integration tests get a deterministic pipeline driven only by
     explicit `run_once` calls.
     """
-    raise NotImplementedError
+
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    app.state.engine = engine
+    app.state.poller = Poller(engine, config.poll_interval_seconds)
+    app.state.poller.start()
+
+    yield
+
+    app.state.poller.stop()
+    app.state.engine.shutdown()
+    app.state.pool.close()
 
 
 def create_app() -> FastAPI:
@@ -85,7 +96,19 @@ def create_app() -> FastAPI:
         GET  /v1/rules             tags=["rules"]    -> list[RuleInfo]
         GET  /healthz              tags=["health"]   -> HealthResponse
     """
-    raise NotImplementedError
+    return FastAPI(lifespan=lifespan, **APP_METADATA)
+    rules = get_rules()
+    repo = PgAnalysisRepository(db)
+    config = get_config()
+    engine = AnalysisEngine(rules, repo, config, batch_size=config.batch_size)
+    app.state.engine = engine
+    app.state.poller = Poller(engine, config.poll_interval_seconds)
+    app.state.poller.start()
 
+    yield
+
+    app.state.poller.stop()
+    app.state.engine.shutdown()
+    app.state.pool.close()
 
 app = create_app()
